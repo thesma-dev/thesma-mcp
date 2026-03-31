@@ -204,3 +204,114 @@ def test_summary_header_multiple_filters() -> None:
     header = _build_summary_header({"tier": "russell1000", "min_net_margin": 20})
     assert "Russell 1000" in header
     assert "net margin >= 20%" in header
+
+
+# --- BLS filter tests (MCP-09) ---
+
+
+def _screener_response_with_bls(
+    companies: list[dict[str, Any]] | None = None,
+    total: int | None = None,
+) -> dict[str, Any]:
+    """Build a screener response with BLS data."""
+    if companies is None:
+        companies = [
+            {
+                "cik": "0000320193",
+                "ticker": "AAPL",
+                "name": "Apple Inc.",
+                "ratios": {"gross_margin": 45.6, "net_margin": 25.3},
+                "bls": {
+                    "industry": "Electronic Computers",
+                    "hiring_trend": "accelerating",
+                    "employment_growth": 3.2,
+                    "comp_ratio": 12.5,
+                },
+            },
+            {
+                "cik": "0000789019",
+                "ticker": "MSFT",
+                "name": "Microsoft Corporation",
+                "ratios": {"gross_margin": 69.4, "net_margin": 35.6},
+                "bls": {
+                    "industry": "Software Publishers",
+                    "hiring_trend": "stable",
+                    "employment_growth": 1.8,
+                    "comp_ratio": 8.3,
+                },
+            },
+        ]
+    if total is None:
+        total = len(companies)
+    return {
+        "data": companies,
+        "pagination": {"page": 1, "per_page": 20, "total": total},
+    }
+
+
+@pytest.mark.asyncio
+async def test_screen_companies_bls_filters() -> None:
+    """screen_companies with BLS filters forwards them to API."""
+    ctx = _make_ctx(_screener_response_with_bls())
+    await screen_companies(ctx, industry_hiring_trend="accelerating", min_comp_to_market_ratio=2.0)
+
+    call_args = ctx.request_context.lifespan_context.client.get.call_args
+    params = call_args.kwargs.get("params", {})
+    assert params.get("industry_hiring_trend") == "accelerating"
+    assert params.get("min_comp_to_market_ratio") == 2.0
+
+
+@pytest.mark.asyncio
+async def test_screen_companies_bls_columns_shown() -> None:
+    """screen_companies with BLS filter shows BLS columns in output."""
+    ctx = _make_ctx(_screener_response_with_bls())
+    result = await screen_companies(ctx, min_industry_employment_growth=1.0)
+
+    assert "Industry" in result
+    assert "Hiring Trend" in result
+    assert "Emp Growth" in result
+    assert "Comp Ratio" in result
+    assert "accelerating" in result
+
+
+@pytest.mark.asyncio
+async def test_screen_companies_no_bls_columns_without_filters() -> None:
+    """screen_companies without BLS filters omits BLS columns."""
+    ctx = _make_ctx(_screener_response())
+    result = await screen_companies(ctx, min_gross_margin=40.0)
+
+    assert "Hiring Trend" not in result
+    assert "Emp Growth" not in result
+
+
+@pytest.mark.asyncio
+async def test_screen_companies_all_bls_filters() -> None:
+    """screen_companies forwards all 6 BLS filter params."""
+    ctx = _make_ctx(_screener_response_with_bls())
+    await screen_companies(
+        ctx,
+        industry_hiring_trend="declining",
+        min_industry_employment_growth=1.0,
+        max_industry_employment_growth=5.0,
+        min_industry_wage_growth=2.0,
+        min_hq_county_wage_growth=1.5,
+        min_comp_to_market_ratio=3.0,
+    )
+
+    call_args = ctx.request_context.lifespan_context.client.get.call_args
+    params = call_args.kwargs.get("params", {})
+    assert params.get("industry_hiring_trend") == "declining"
+    assert params.get("min_industry_employment_growth") == 1.0
+    assert params.get("max_industry_employment_growth") == 5.0
+    assert params.get("min_industry_wage_growth") == 2.0
+    assert params.get("min_hq_county_wage_growth") == 1.5
+    assert params.get("min_comp_to_market_ratio") == 3.0
+
+
+@pytest.mark.asyncio
+async def test_screen_companies_bls_filter_in_summary() -> None:
+    """screen_companies with BLS filter mentions it in summary header."""
+    ctx = _make_ctx(_screener_response_with_bls())
+    result = await screen_companies(ctx, industry_hiring_trend="declining")
+
+    assert "hiring trend: declining" in result
