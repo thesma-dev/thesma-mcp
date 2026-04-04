@@ -9,6 +9,20 @@ from mcp.server.fastmcp import Context
 from thesma_mcp.formatters import format_percent, format_table
 from thesma_mcp.server import AppContext, mcp
 
+_BLS_FILTER_KEYS = {
+    "min_industry_quits_rate",
+    "max_industry_quits_rate",
+    "min_industry_openings_rate",
+    "max_industry_openings_rate",
+}
+
+BLS_FIELD_LABELS: dict[str, str] = {
+    "min_industry_quits_rate": "industry quits rate",
+    "max_industry_quits_rate": "industry quits rate",
+    "min_industry_openings_rate": "industry openings rate",
+    "max_industry_openings_rate": "industry openings rate",
+}
+
 VALID_SORT_FIELDS = {
     "gross_margin",
     "operating_margin",
@@ -68,11 +82,15 @@ def _build_summary_header(params: dict[str, Any]) -> str:
         ("max_debt_to_equity", "debt-to-equity", "<="),
         ("min_current_ratio", "current ratio", ">="),
         ("min_interest_coverage", "interest coverage", ">="),
+        ("min_industry_quits_rate", "industry quits rate", ">="),
+        ("max_industry_quits_rate", "industry quits rate", "<="),
+        ("min_industry_openings_rate", "industry openings rate", ">="),
+        ("max_industry_openings_rate", "industry openings rate", "<="),
     ]
     for param_name, label, op in filter_map:
         val = params.get(param_name)
         if val is not None:
-            if "margin" in label or "growth" in label or label in ("ROE", "ROA"):
+            if "margin" in label or "growth" in label or "rate" in label or label in ("ROE", "ROA"):
                 filters.append(f"{label} {op} {val}%")
             else:
                 filters.append(f"{label} {op} {val}")
@@ -173,6 +191,10 @@ async def screen_companies(
     sic: str | None = None,
     has_insider_buying: bool | None = None,
     has_institutional_increase: bool | None = None,
+    min_industry_quits_rate: float | None = None,
+    max_industry_quits_rate: float | None = None,
+    min_industry_openings_rate: float | None = None,
+    max_industry_openings_rate: float | None = None,
     sort: str | None = None,
     order: str | None = None,
     limit: int = 20,
@@ -207,6 +229,10 @@ async def screen_companies(
         "sic": sic,
         "has_insider_buying": has_insider_buying,
         "has_institutional_increase": has_institutional_increase,
+        "min_industry_quits_rate": min_industry_quits_rate,
+        "max_industry_quits_rate": max_industry_quits_rate,
+        "min_industry_openings_rate": min_industry_openings_rate,
+        "max_industry_openings_rate": max_industry_openings_rate,
         "sort": sort,
         "order": order,
     }
@@ -243,11 +269,23 @@ async def screen_companies(
         headers.append(FIELD_LABELS.get(col, col).title())
         alignments.append("r")
 
+    # Add JOLTS columns when JOLTS filters are active
+    has_jolts_filter = any(local_params.get(k) is not None for k in _BLS_FILTER_KEYS)
+    if has_jolts_filter:
+        headers.extend(["Quits Rate", "Openings Rate", "Tightness"])
+        alignments.extend(["r", "r", "r"])
+
     rows: list[list[str]] = []
     for i, company in enumerate(data, 1):
         row = [str(i), company.get("ticker", ""), company.get("name", "")]
         for col in display_cols:
             row.append(_get_column_value(company, col))
+        if has_jolts_filter:
+            labor = company.get("labor_context", {}) or {}
+            row.append(format_percent(labor.get("industry_quits_rate")))
+            row.append(format_percent(labor.get("industry_openings_rate")))
+            tightness = labor.get("labour_market_tightness")
+            row.append(f"{tightness:.2f}" if tightness is not None else "N/A")
         rows.append(row)
 
     table = format_table(headers, rows, alignments)
