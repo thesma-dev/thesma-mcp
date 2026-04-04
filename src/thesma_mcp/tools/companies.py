@@ -7,7 +7,7 @@ from typing import Any
 from mcp.server.fastmcp import Context
 
 from thesma_mcp.client import ThesmaAPIError
-from thesma_mcp.formatters import format_table
+from thesma_mcp.formatters import format_currency, format_number, format_table
 from thesma_mcp.server import AppContext, mcp
 
 
@@ -96,7 +96,7 @@ async def get_company(ticker: str, ctx: Context[Any, AppContext, Any]) -> str:
         return str(e)
 
     try:
-        response = await app.client.get(f"/v1/us/sec/companies/{cik}")
+        response = await app.client.get(f"/v1/us/sec/companies/{cik}", params={"include": "labor_context"})
     except ThesmaAPIError as e:
         return str(e)
 
@@ -121,4 +121,97 @@ async def get_company(ticker: str, ctx: Context[Any, AppContext, Any]) -> str:
         "",
         "Source: SEC EDGAR company registry.",
     ]
+
+    labor_ctx = data.get("labor_context")
+    if labor_ctx:
+        lines.append("")
+        lines.append(_format_labor_context(labor_ctx))
+
     return "\n".join(lines)
+
+
+def _yoy_indicator(value: float | None) -> str:
+    """Return arrow indicator for YoY percentage. Empty string if null or zero."""
+    if value is None or value == 0:
+        return ""
+    if value > 0:
+        return f"▲ {value:.1f}%"
+    return f"▼ {abs(value):.1f}%"
+
+
+def _format_labor_context(labor_ctx: dict[str, Any]) -> str:
+    """Format the labor market context section from get_company response."""
+    sections: list[str] = ["## Labor Market Context"]
+
+    # Industry section
+    industry = labor_ctx.get("industry")
+    if industry:
+        naics = industry.get("naics_code", "")
+        desc = industry.get("naics_description", "")
+        header = f"**Industry (NAICS {naics}"
+        if desc:
+            header += f" - {desc}"
+        header += ")**"
+        sections.append("")
+        sections.append(header)
+
+        emp = industry.get("total_employment_thousands")
+        if emp is not None:
+            emp_line = f"- Employment: {format_number(emp)}K"
+            yoy = _yoy_indicator(industry.get("employment_yoy_pct"))
+            if yoy:
+                emp_line += f" ({yoy} YoY)"
+            sections.append(emp_line)
+
+        earnings = industry.get("avg_hourly_earnings")
+        if earnings is not None:
+            earn_line = f"- Avg Hourly Earnings: {format_currency(earnings, decimals=2)}"
+            yoy = _yoy_indicator(industry.get("earnings_yoy_pct"))
+            if yoy:
+                earn_line += f" ({yoy} YoY)"
+            sections.append(earn_line)
+
+    # Local market section
+    local = labor_ctx.get("local_market")
+    if local:
+        county_name = local.get("county_name", "")
+        sections.append("")
+        sections.append(f"**Local Market ({county_name})**")
+
+        ind_emp = local.get("industry_employment")
+        if ind_emp is not None:
+            sections.append(f"- Industry Employment: {format_number(ind_emp)}")
+
+        avg_wage = local.get("avg_weekly_wage")
+        if avg_wage is not None:
+            wage_line = f"- Avg Weekly Wage: {format_currency(avg_wage, decimals=0)}"
+            yoy = _yoy_indicator(local.get("industry_wage_yoy_pct"))
+            if yoy:
+                wage_line += f" ({yoy} YoY)"
+            sections.append(wage_line)
+
+    # Compensation benchmark section
+    comp = labor_ctx.get("compensation_benchmark")
+    if comp:
+        soc_code = comp.get("soc_code", "")
+        soc_title = comp.get("soc_title", "")
+        sections.append("")
+        sections.append("**CEO Compensation Benchmark**")
+
+        median = comp.get("market_median_annual_wage")
+        if median is not None:
+            sections.append(f"- Market Median: {format_currency(median, decimals=0)} (SOC {soc_code}, {soc_title})")
+
+        p75 = comp.get("market_75th_percentile")
+        if p75 is not None:
+            sections.append(f"- Market 75th Percentile: {format_currency(p75, decimals=0)}")
+
+        p90 = comp.get("market_90th_percentile")
+        if p90 is not None:
+            sections.append(f"- Market 90th Percentile: {format_currency(p90, decimals=0)}")
+
+        ratio = comp.get("comp_to_market_ratio")
+        if ratio is not None:
+            sections.append(f"- Company CEO Comp-to-Market: {ratio:.1f}x")
+
+    return "\n".join(sections)

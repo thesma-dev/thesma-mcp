@@ -82,6 +82,25 @@ def _build_summary_header(params: dict[str, Any]) -> str:
     if params.get("has_institutional_increase"):
         filters.append("institutional position increases")
 
+    # BLS filters
+    bls_filter_map: list[tuple[str, str, str]] = [
+        ("industry_hiring_trend", "hiring trend", "="),
+        ("min_industry_employment_growth", "industry employment growth", ">="),
+        ("max_industry_employment_growth", "industry employment growth", "<="),
+        ("min_industry_wage_growth", "industry wage growth", ">="),
+        ("min_hq_county_wage_growth", "HQ county wage growth", ">="),
+        ("min_comp_to_market_ratio", "comp-to-market ratio", ">="),
+    ]
+    for param_name, label, op in bls_filter_map:
+        val = params.get(param_name)
+        if val is not None:
+            if param_name == "industry_hiring_trend":
+                filters.append(f"hiring trend: {val}")
+            elif "growth" in label:
+                filters.append(f"{label} {op} {val}%")
+            else:
+                filters.append(f"{label} {op} {val}")
+
     prefix = " ".join(parts) + " companies" if parts else "Companies"
     if filters:
         return f"{prefix} with {' and '.join(filters)}"
@@ -144,11 +163,32 @@ def _get_column_value(company: dict[str, Any], col: str) -> str:
     return format_percent(val)
 
 
+_BLS_FILTER_KEYS = {
+    "industry_hiring_trend",
+    "min_industry_employment_growth",
+    "max_industry_employment_growth",
+    "min_industry_wage_growth",
+    "min_hq_county_wage_growth",
+    "min_comp_to_market_ratio",
+}
+
+BLS_FIELD_LABELS: dict[str, str] = {
+    "industry_hiring_trend": "hiring trend",
+    "min_industry_employment_growth": "industry employment growth",
+    "max_industry_employment_growth": "industry employment growth",
+    "min_industry_wage_growth": "industry wage growth",
+    "min_hq_county_wage_growth": "HQ county wage growth",
+    "min_comp_to_market_ratio": "comp-to-market ratio",
+}
+
+
 @mcp.tool(
     description=(
         "Find US public companies matching financial criteria. "
         "Combine filters: profitability (margins), growth rates, leverage ratios, "
         "index membership, SIC code, and insider/institutional signals. "
+        "Supports labor market filters: industry hiring trend, employment growth, "
+        "wage growth, and comp-to-market ratio. "
         "Sort by any ratio: gross_margin, operating_margin, net_margin, return_on_equity, "
         "return_on_assets, debt_to_equity, current_ratio, interest_coverage, "
         "revenue_growth_yoy, net_income_growth_yoy, eps_growth_yoy."
@@ -176,6 +216,12 @@ async def screen_companies(
     sort: str | None = None,
     order: str | None = None,
     limit: int = 20,
+    industry_hiring_trend: str | None = None,
+    min_industry_employment_growth: float | None = None,
+    max_industry_employment_growth: float | None = None,
+    min_industry_wage_growth: float | None = None,
+    min_hq_county_wage_growth: float | None = None,
+    min_comp_to_market_ratio: float | None = None,
 ) -> str:
     """Screen companies by financial criteria."""
     app: AppContext = ctx.request_context.lifespan_context
@@ -209,6 +255,12 @@ async def screen_companies(
         "has_institutional_increase": has_institutional_increase,
         "sort": sort,
         "order": order,
+        "industry_hiring_trend": industry_hiring_trend,
+        "min_industry_employment_growth": min_industry_employment_growth,
+        "max_industry_employment_growth": max_industry_employment_growth,
+        "min_industry_wage_growth": min_industry_wage_growth,
+        "min_hq_county_wage_growth": min_hq_county_wage_growth,
+        "min_comp_to_market_ratio": min_comp_to_market_ratio,
     }
 
     api_params: dict[str, Any] = {"per_page": limit}
@@ -236,6 +288,9 @@ async def screen_companies(
     # Pick display columns
     display_cols = _pick_display_columns(local_params, sort)
 
+    # Detect whether BLS filters are active
+    bls_active = any(api_params.get(k) is not None for k in _BLS_FILTER_KEYS)
+
     # Build table
     headers = ["#", "Ticker", "Company"]
     alignments = ["r", "l", "l"]
@@ -243,11 +298,23 @@ async def screen_companies(
         headers.append(FIELD_LABELS.get(col, col).title())
         alignments.append("r")
 
+    if bls_active:
+        headers.extend(["Industry", "Hiring Trend", "Emp Growth", "Comp Ratio"])
+        alignments.extend(["l", "l", "r", "r"])
+
     rows: list[list[str]] = []
     for i, company in enumerate(data, 1):
         row = [str(i), company.get("ticker", ""), company.get("name", "")]
         for col in display_cols:
             row.append(_get_column_value(company, col))
+        if bls_active:
+            bls = company.get("bls", {}) or {}
+            row.append(str(bls.get("industry", "")))
+            row.append(str(bls.get("hiring_trend", "")))
+            eg = bls.get("employment_growth")
+            row.append(f"{eg:.1f}%" if eg is not None else "N/A")
+            cr = bls.get("comp_ratio")
+            row.append(f"{cr:.1f}x" if cr is not None else "N/A")
         rows.append(row)
 
     table = format_table(headers, rows, alignments)
