@@ -41,6 +41,7 @@ import thesma_mcp.tools.bls_counties as _bls_counties_tools  # noqa: F401, E402
 import thesma_mcp.tools.bls_industries as _bls_industries_tools  # noqa: F401, E402
 import thesma_mcp.tools.bls_metrics as _bls_metrics_tools  # noqa: F401, E402
 import thesma_mcp.tools.bls_occupations as _bls_occupations_tools  # noqa: F401, E402
+import thesma_mcp.tools.bls_turnover as _bls_turnover_tools  # noqa: F401, E402
 import thesma_mcp.tools.companies as _companies_tools  # noqa: F401, E402
 import thesma_mcp.tools.compensation as _compensation_tools  # noqa: F401, E402
 import thesma_mcp.tools.events as _events_tools  # noqa: F401, E402
