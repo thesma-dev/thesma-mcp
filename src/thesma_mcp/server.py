@@ -26,7 +26,7 @@ logger = logging.getLogger("thesma_mcp")
 class AppContext:
     """Application context holding shared resources."""
 
-    client: AsyncThesmaClient
+    client: AsyncThesmaClient | None
     resolver: TickerResolver
 
 
@@ -36,19 +36,24 @@ async def app_lifespan(server: Any) -> AsyncIterator[AppContext]:
     api_key = os.environ.get("THESMA_API_KEY", "")
     transport = os.environ.get("THESMA_MCP_TRANSPORT", "stdio")
 
-    client = AsyncThesmaClient(api_key=api_key)
-    resolver = TickerResolver(client)
+    has_key = bool(api_key and api_key.strip())
 
-    if transport == "http":
-        if api_key and api_key.strip():
+    if has_key:
+        client: AsyncThesmaClient | None = AsyncThesmaClient(api_key=api_key)
+        resolver = TickerResolver(client)
+        if transport == "http":
             logger.info("Default API key configured — unauthenticated requests will use free tier")
-        else:
+    else:
+        client = None
+        resolver = TickerResolver(None)
+        if transport == "http":
             logger.info("No default API key — all requests require Authorization header")
 
     try:
         yield AppContext(client=client, resolver=resolver)
     finally:
-        await client.close()
+        if client:
+            await client.close()
 
 
 def get_client(ctx: Context[Any, AppContext, Any]) -> AsyncThesmaClient:
@@ -76,6 +81,9 @@ def get_client(ctx: Context[Any, AppContext, Any]) -> AsyncThesmaClient:
             return AsyncThesmaClient(api_key=token)
 
     # Fall back to default client
+    if app.client is None:
+        msg = "No API key provided. Set THESMA_API_KEY or pass an Authorization: Bearer header."
+        raise ThesmaError(msg)
     return app.client
 
 
