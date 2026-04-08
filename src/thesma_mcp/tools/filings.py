@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from mcp.server.fastmcp import Context
+from thesma.errors import ThesmaError
 
-from thesma_mcp.client import ThesmaAPIError
 from thesma_mcp.formatters import format_table
 from thesma_mcp.server import AppContext, mcp
 
@@ -33,50 +33,54 @@ async def search_filings(
     app = _get_ctx(ctx)
     limit = min(limit, 50)
 
-    params: dict[str, Any] = {"per_page": limit}
     cik: str | None = None
 
     if ticker:
         try:
             cik = await app.resolver.resolve(ticker)
-        except ThesmaAPIError as e:
+        except ThesmaError as e:
             return str(e)
-        params["cik"] = cik
-
-    if type:
-        params["type"] = type
-    if from_date:
-        params["from"] = from_date
-    if to_date:
-        params["to"] = to_date
 
     try:
-        response = await app.client.get("/v1/us/sec/filings", params=params)
-    except ThesmaAPIError as e:
+        response = await app.client.filings.list_all(  # type: ignore[misc]
+            cik=cik,
+            filing_type=type,
+            start_date=from_date,
+            end_date=to_date,
+            per_page=limit,
+        )
+    except ThesmaError as e:
         return str(e)
 
-    filings = response.get("data", [])
-    pagination = response.get("pagination", {})
-    total = pagination.get("total", len(filings))
+    filings = response.data
+    total = response.pagination.total
 
     if not filings:
         return "No filings found matching the search criteria."
 
     # Build title
     if ticker and filings:
-        company_name = filings[0].get("company_name", ticker.upper())
-        company_ticker = filings[0].get("ticker", ticker.upper())
-        title = f"{company_name} ({company_ticker}) — SEC Filings ({len(filings)} of {total:,})"
+        title = f"SEC Filings ({len(filings)} of {total:,})"
+        # Attempt to resolve company name from a separate lookup
+        if cik:
+            try:
+                company_resp = await app.client.companies.get(cik)  # type: ignore[misc]
+                comp_data = company_resp.data
+                comp_name = getattr(comp_data, "name", ticker.upper())
+                comp_ticker = getattr(comp_data, "ticker", ticker.upper())
+                title = f"{comp_name} ({comp_ticker}) — SEC Filings ({len(filings)} of {total:,})"
+            except ThesmaError:
+                title = f"{ticker.upper()} — SEC Filings ({len(filings)} of {total:,})"
     else:
         title = f"SEC Filings ({len(filings)} of {total:,})"
 
     headers = ["Date", "Type", "Period", "Accession Number"]
     rows = []
     for f in filings:
-        filed_date = f.get("filed_date", f.get("filing_date", ""))
-        filing_type = f.get("filing_type", f.get("type", ""))
-        period = f.get("period_of_report", f.get("period", "—")) or "—"
-        accession = f.get("accession_number", "")
+        filed_date = str(f.filed_at.date()) if hasattr(f.filed_at, "date") else str(f.filed_at)[:10]
+        filing_type = f.filing_type
+        period = str(f.period_of_report) if f.period_of_report else "\u2014"
+        accession = f.accession_number
         rows.append([filed_date, filing_type, period, accession])
 
     lines = [title, ""]

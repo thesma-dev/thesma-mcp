@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from mcp.server.fastmcp import Context
+from thesma.errors import ThesmaError
 
 from thesma_mcp.formatters import format_table
 from thesma_mcp.server import AppContext, mcp
@@ -46,12 +47,16 @@ def _validate_date(value: str) -> str | None:
     return None
 
 
-def _event_description(event: dict[str, Any]) -> str:
+def _event_description(event: Any) -> str:
     """Extract a display description from an event."""
-    items = event.get("items", [])
+    items = event.items if hasattr(event, "items") else []
     if items:
-        return str(items[0].get("description", ""))
-    return str(event.get("description", ""))
+        item = items[0]
+        desc = getattr(item, "description", None)
+        if desc is None and hasattr(item, "model_extra"):
+            desc = item.model_extra.get("description", "")
+        return str(desc or "")
+    return ""
 
 
 @mcp.tool(
@@ -91,33 +96,27 @@ async def get_events(
     # Cap limit
     limit = min(limit, 50)
 
-    # Build params
-    params: dict[str, Any] = {"per_page": limit}
-    if category:
-        params["category"] = category
-    if from_date:
-        params["from"] = from_date
-    if to_date:
-        params["to"] = to_date
-
     # Determine endpoint
     company_name: str | None = None
     company_ticker: str | None = None
-    if ticker:
-        cik = await app.resolver.resolve(ticker)
-        path = f"/v1/us/sec/companies/{cik}/events"
-        # Get company info for header
-        company_resp = await app.client.get(f"/v1/us/sec/companies/{cik}")
-        company_data = company_resp.get("data", {})
-        company_name = company_data.get("name", ticker)
-        company_ticker = company_data.get("ticker", ticker.upper())
-    else:
-        path = "/v1/us/sec/events"
+    try:
+        if ticker:
+            cik = await app.resolver.resolve(ticker)
+            response = await app.client.events.list(cik, from_date=from_date, category=category, per_page=limit)  # type: ignore[misc]
+            # Get company info from the first event if available
+            if response.data:
+                company_name = response.data[0].company_name or ticker
+                company_ticker = response.data[0].company_ticker or ticker.upper()
+            else:
+                company_name = ticker
+                company_ticker = ticker.upper()
+        else:
+            response = await app.client.events.list_all(from_date=from_date, category=category, per_page=limit)  # type: ignore[misc]
+    except ThesmaError as e:
+        return str(e)
 
-    response = await app.client.get(path, params=params)
-    data = response.get("data", [])
-    pagination = response.get("pagination", {})
-    total = pagination.get("total", len(data))
+    data = response.data
+    total = response.pagination.total
 
     if not data:
         scope = f"for {company_name}" if company_name else ""
@@ -138,7 +137,11 @@ async def get_events(
         headers = ["Date", "Category", "Description"]
         alignments = ["l", "l", "l"]
         rows = [
-            [event.get("filed_at", event.get("date", ""))[:10], event.get("category", ""), _event_description(event)]
+            [
+                str(event.filed_at.date()) if hasattr(event.filed_at, "date") else str(event.filed_at)[:10],
+                event.category,
+                _event_description(event),
+            ]
             for event in data
         ]
     else:
@@ -146,9 +149,9 @@ async def get_events(
         alignments = ["l", "l", "l", "l"]
         rows = [
             [
-                event.get("filed_at", event.get("date", ""))[:10],
-                event.get("ticker", ""),
-                event.get("company_name", ""),
+                str(event.filed_at.date()) if hasattr(event.filed_at, "date") else str(event.filed_at)[:10],
+                event.company_ticker or "",
+                event.company_name or "",
                 _event_description(event),
             ]
             for event in data

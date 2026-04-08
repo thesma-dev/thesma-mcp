@@ -6,8 +6,8 @@ import re
 from typing import Any
 
 from mcp.server.fastmcp import Context
+from thesma.errors import ThesmaError
 
-from thesma_mcp.client import ThesmaAPIError
 from thesma_mcp.formatters import format_number, format_table
 from thesma_mcp.server import AppContext, mcp
 
@@ -33,25 +33,19 @@ async def search_industries(
     """Search for BLS industries by name or NAICS level."""
     app = _get_ctx(ctx)
 
-    params: dict[str, Any] = {"per_page": 25}
-    if query is not None:
-        params["search"] = query
-    if level is not None:
-        params["level"] = level
-
     try:
-        response = await app.client.get("/v1/us/bls/industries", params=params)
-    except ThesmaAPIError as e:
+        response = await app.client.bls.industries(search=query, level=level, per_page=25)  # type: ignore[misc]
+    except ThesmaError as e:
         return str(e)
 
-    data: list[dict[str, Any]] = response.get("data", [])
+    data = response.data
 
     if not data:
         if query:
             return f"No industries found matching '{query}'."
         return "No industries found."
 
-    rows = [[str(d.get("naics_code", "")), str(d.get("title", "")), str(d.get("level", ""))] for d in data]
+    rows = [[d.naics_code, d.title, str(d.level)] for d in data]
     table = format_table(["NAICS", "Title", "Level"], rows)
 
     count = len(data)
@@ -78,19 +72,19 @@ async def get_industry_detail(
     app = _get_ctx(ctx)
 
     try:
-        response = await app.client.get(f"/v1/us/bls/industries/{naics}")
-    except ThesmaAPIError as e:
+        result = await app.client.bls.industry(naics)  # type: ignore[misc]
+    except ThesmaError as e:
         return str(e)
 
-    data: dict[str, Any] = response.get("data", {})
+    data = result.data
 
-    naics_code = data.get("naics_code", naics)
-    title = data.get("title", "Unknown")
-    level = data.get("level", "")
-    parent_naics = data.get("parent_naics", "N/A")
-    has_ces = data.get("has_ces_data", False)
-    has_qcew = data.get("has_qcew_data", False)
-    has_oews = data.get("has_oews_data", False)
+    naics_code = data.naics_code
+    title = data.title
+    level = data.level
+    parent_naics = getattr(data, "parent_naics", "N/A") or "N/A"
+    has_ces = getattr(data, "has_ces_data", False)
+    has_qcew = getattr(data, "has_qcew_data", False)
+    has_oews = getattr(data, "has_oews_data", False)
 
     lines = [
         f"{title} (NAICS {naics_code})",
@@ -104,11 +98,11 @@ async def get_industry_detail(
         f"{'OEWS Data:':<20}{'Yes' if has_oews else 'No'}",
     ]
 
-    children: list[dict[str, Any]] = data.get("children", [])
+    children = getattr(data, "children", []) or []
     if children:
         lines.append("")
         lines.append("Child Industries:")
-        rows = [[str(c.get("naics_code", "")), str(c.get("title", "")), str(c.get("level", ""))] for c in children]
+        rows = [[c.naics_code, c.title, str(c.level)] for c in children]
         lines.append(format_table(["NAICS", "Title", "Level"], rows))
 
     lines.append("")
@@ -146,42 +140,41 @@ async def get_industry_employment(
     if to_date and not _DATE_RE.match(to_date):
         return f"Invalid to_date format '{to_date}'. Expected YYYY-MM (e.g. '2024-12')."
 
-    params: dict[str, Any] = {}
-    if adjustment is not None:
-        params["adjustment"] = adjustment
-    if geo is not None:
-        params["geo"] = geo
-    if state is not None:
-        params["state"] = state
-    if metro is not None:
-        params["metro"] = metro
-
     try:
         if from_date and to_date:
-            params["from"] = from_date
-            params["to"] = to_date
-            response = await app.client.get(f"/v1/us/bls/industries/{naics}/employment", params=params)
+            response = await app.client.bls.employment(  # type: ignore[misc]
+                naics,
+                from_date=from_date,
+                to_date=to_date,
+                adjustment=adjustment or "sa",
+                geo=geo or "national",
+                state=state,
+                metro=metro,
+            )
             return _format_employment_series(response, naics)
         else:
-            response = await app.client.get(f"/v1/us/bls/industries/{naics}/employment/latest", params=params)
-            return _format_employment_latest(response, naics)
-    except ThesmaAPIError as e:
+            result = await app.client.bls.employment_latest(  # type: ignore[misc]
+                naics,
+                adjustment=adjustment or "sa",
+                geo=geo or "national",
+                state=state,
+                metro=metro,
+            )
+            return _format_employment_latest(result, naics)
+    except ThesmaError as e:
         return str(e)
 
 
-def _format_employment_latest(response: dict[str, Any], naics: str) -> str:
+def _format_employment_latest(result: Any, naics: str) -> str:
     """Format latest employment observation as key-value output."""
-    data: dict[str, Any] = response.get("data", {})
+    data = result.data
 
-    if not data:
-        return f"No employment data available for NAICS {naics}."
-
-    period = data.get("period", "")
-    employment = data.get("all_employees_thousands")
-    employment_yoy = data.get("employment_yoy_pct")
-    avg_hourly_earnings = data.get("avg_hourly_earnings")
-    earnings_yoy = data.get("earnings_yoy_pct")
-    avg_weekly_hours = data.get("avg_weekly_hours")
+    period = data.period
+    employment = data.all_employees_thousands
+    employment_yoy = getattr(data, "employment_yoy_pct", None)
+    avg_hourly_earnings = data.avg_hourly_earnings
+    earnings_yoy = getattr(data, "earnings_yoy_pct", None)
+    avg_weekly_hours = getattr(data, "avg_weekly_hours", None)
 
     lines = [
         f"Employment — NAICS {naics} (Latest: {period})",
@@ -198,9 +191,9 @@ def _format_employment_latest(response: dict[str, Any], naics: str) -> str:
     return "\n".join(lines)
 
 
-def _format_employment_series(response: dict[str, Any], naics: str) -> str:
+def _format_employment_series(response: Any, naics: str) -> str:
     """Format employment time series as a table."""
-    data: list[dict[str, Any]] = response.get("data", [])
+    data = response.data
 
     if not data:
         return f"No employment data available for NAICS {naics} in the specified date range."
@@ -208,10 +201,10 @@ def _format_employment_series(response: dict[str, Any], naics: str) -> str:
     headers = ["Period", "Employment (K)", "YoY %", "Avg Hourly Earnings"]
     rows: list[list[str]] = []
     for d in data:
-        period = str(d.get("period", ""))
-        employment = d.get("all_employees_thousands")
-        yoy = d.get("employment_yoy_pct")
-        earnings = d.get("avg_hourly_earnings")
+        period = d.period
+        employment = d.all_employees_thousands
+        yoy = getattr(d, "employment_yoy_pct", None)
+        earnings = d.avg_hourly_earnings
         rows.append(
             [
                 period,

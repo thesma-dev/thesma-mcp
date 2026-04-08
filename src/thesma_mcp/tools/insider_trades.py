@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from mcp.server.fastmcp import Context
+from thesma.errors import ThesmaError
 
 from thesma_mcp.formatters import format_currency, format_table
 from thesma_mcp.server import AppContext, mcp
@@ -30,7 +31,7 @@ def _truncate_title(title: str | None) -> str:
         return ""
     if len(title) <= MAX_TITLE_LEN:
         return title
-    return title[: MAX_TITLE_LEN - 1] + "…"
+    return title[: MAX_TITLE_LEN - 1] + "\u2026"
 
 
 def _format_shares_compact(value: float | int | None) -> str:
@@ -85,35 +86,27 @@ async def get_insider_trades(
     # Cap limit
     limit = min(limit, 50)
 
-    # Build params
-    params: dict[str, Any] = {"per_page": limit}
-    if type:
-        params["type"] = type
-    if from_date:
-        params["from"] = from_date
-    if to_date:
-        params["to"] = to_date
-
     # Determine endpoint
     company_name: str | None = None
     company_ticker: str | None = None
-    if ticker:
-        cik = await app.resolver.resolve(ticker)
-        path = f"/v1/us/sec/companies/{cik}/insider-trades"
-        # Get company info for header
-        company_resp = await app.client.get(f"/v1/us/sec/companies/{cik}")
-        company_data = company_resp.get("data", {})
-        company_name = company_data.get("name", ticker)
-        company_ticker = company_data.get("ticker", ticker.upper())
-    else:
-        path = "/v1/us/sec/insider-trades"
-        if min_value is not None:
-            params["min_value"] = min_value
+    try:
+        if ticker:
+            cik = await app.resolver.resolve(ticker)
+            response = await app.client.insider_trades.list(cik, from_date=from_date, trade_type=type, per_page=limit)  # type: ignore[misc]
+            # Get company info from the first trade if available
+            if response.data:
+                company_name = response.data[0].company_name or ticker
+                company_ticker = response.data[0].company_ticker or ticker.upper()
+            else:
+                company_name = ticker
+                company_ticker = ticker.upper()
+        else:
+            response = await app.client.insider_trades.list_all(from_date=from_date, per_page=limit)  # type: ignore[misc]
+    except ThesmaError as e:
+        return str(e)
 
-    response = await app.client.get(path, params=params)
-    data = response.get("data", [])
-    pagination = response.get("pagination", {})
-    total = pagination.get("total", len(data))
+    data = response.data
+    total = response.pagination.total
 
     if not data:
         scope = f"for {company_name}" if company_name else ""
@@ -136,12 +129,12 @@ async def get_insider_trades(
         alignments = ["l", "l", "l", "r", "r", "r"]
         rows = [
             [
-                trade.get("transaction_date", trade.get("date", ""))[:10],
-                trade.get("owner_name", ""),
-                _truncate_title(trade.get("title", "")),
-                _format_shares_compact(trade.get("shares")),
-                _format_price(trade.get("price_per_share")),
-                format_currency(trade.get("total_value")),
+                str(trade.transaction_date),
+                trade.person.name,
+                _truncate_title(trade.person.title),
+                _format_shares_compact(trade.shares),
+                _format_price(trade.price_per_share),
+                format_currency(trade.total_value),
             ]
             for trade in data
         ]
@@ -150,12 +143,12 @@ async def get_insider_trades(
         alignments = ["l", "l", "l", "l", "r", "l"]
         rows = [
             [
-                trade.get("transaction_date", trade.get("date", ""))[:10],
-                trade.get("ticker", ""),
-                trade.get("owner_name", ""),
-                _truncate_title(trade.get("title", "")),
-                format_currency(trade.get("total_value")),
-                "Yes" if trade.get("is_10b5_1") else "No",
+                str(trade.transaction_date),
+                trade.company_ticker or "",
+                trade.person.name,
+                _truncate_title(trade.person.title),
+                format_currency(trade.total_value),
+                "Yes" if trade.is_planned_trade else "No",
             ]
             for trade in data
         ]

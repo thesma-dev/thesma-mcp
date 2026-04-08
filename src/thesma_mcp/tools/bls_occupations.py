@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from mcp.server.fastmcp import Context
+from thesma.errors import ThesmaError
 
-from thesma_mcp.client import ThesmaAPIError
 from thesma_mcp.formatters import format_currency, format_table
 from thesma_mcp.server import AppContext, mcp
 
@@ -32,25 +32,19 @@ async def search_occupations(
     """Search for BLS occupations by name."""
     app = _get_ctx(ctx)
 
-    params: dict[str, Any] = {"per_page": 25}
-    if query is not None:
-        params["search"] = query
-    if group is not None:
-        params["group"] = group
-
     try:
-        response = await app.client.get("/v1/us/bls/occupations", params=params)
-    except ThesmaAPIError as e:
+        response = await app.client.bls.occupations(search=query, group=group, per_page=25)  # type: ignore[misc]
+    except ThesmaError as e:
         return str(e)
 
-    data: list[dict[str, Any]] = response.get("data", [])
+    data = response.data
 
     if not data:
         if query:
             return f"No occupations found matching '{query}'."
         return "No occupations found."
 
-    rows = [[str(d.get("soc_code", "")), str(d.get("title", "")), str(d.get("major_group", ""))] for d in data]
+    rows = [[d.soc_code, d.title, d.major_group] for d in data]
     table = format_table(["SOC", "Title", "Major Group"], rows)
 
     count = len(data)
@@ -86,24 +80,14 @@ async def get_occupation_wages(
     if "-" not in soc and len(soc) == 6:
         soc = f"{soc[:2]}-{soc[2:]}"
 
-    params: dict[str, Any] = {}
-    if industry is not None:
-        params["industry"] = industry
-    if geo is not None:
-        params["geo"] = geo
-    if state is not None:
-        params["state"] = state
-    if metro is not None:
-        params["metro"] = metro
-    if year is not None:
-        params["year"] = year
-
     try:
-        response = await app.client.get(f"/v1/us/bls/occupations/{soc}/wages", params=params)
-    except ThesmaAPIError as e:
+        response = await app.client.bls.occupation_wages(  # type: ignore[misc]
+            soc, industry=industry, geo=geo or "national", state=state, metro=metro, year=year
+        )
+    except ThesmaError as e:
         return str(e)
 
-    data: list[dict[str, Any]] = response.get("data", [])
+    data = response.data
 
     if not data:
         return f"No wage data available for SOC {soc}."
@@ -113,12 +97,12 @@ async def get_occupation_wages(
     for d in data:
         rows.append(
             [
-                str(d.get("soc_code", "")),
-                str(d.get("area_name", "")),
-                format_currency(d.get("mean_annual_wage"), decimals=0),
-                format_currency(d.get("mean_hourly_wage"), decimals=2),
-                format_currency(d.get("median_annual_wage"), decimals=0),
-                format_currency(d.get("median_hourly_wage"), decimals=2),
+                d.soc_code,
+                getattr(d, "area_name", ""),
+                format_currency(getattr(d, "mean_annual_wage", None), decimals=0),
+                format_currency(getattr(d, "mean_hourly_wage", None), decimals=2),
+                format_currency(getattr(d, "median_annual_wage", None), decimals=0),
+                format_currency(getattr(d, "median_hourly_wage", None), decimals=2),
             ]
         )
 
@@ -134,7 +118,7 @@ async def get_occupation_wages(
         ("90th", "pct90_hourly"),
     ]
     for label, key in percentile_fields:
-        val = first.get(key)
+        val = getattr(first, key, None)
         if val is not None:
             pct_lines.append(f"  {label}: {format_currency(val, decimals=2)}/hr")
 

@@ -8,7 +8,6 @@ import httpx
 import pytest
 import respx
 
-from thesma_mcp.client import ThesmaClient
 from thesma_mcp.resolver import TickerResolver
 
 BASE_URL = "https://api.thesma.dev"
@@ -22,13 +21,15 @@ def mock_api() -> respx.MockRouter:
 
 
 @pytest.fixture()
-def client(mock_api: respx.MockRouter) -> ThesmaClient:
-    """Create a ThesmaClient with a test API key."""
-    return ThesmaClient(api_key="test-key-123")
+def client(mock_api: respx.MockRouter) -> Any:
+    """Create an AsyncThesmaClient with a test API key."""
+    from thesma.client import AsyncThesmaClient
+
+    return AsyncThesmaClient(api_key="th_test_key123456789012345678901234")
 
 
 @pytest.fixture()
-def resolver(client: ThesmaClient) -> TickerResolver:
+def resolver(client: Any) -> TickerResolver:
     """Create a TickerResolver backed by the mock client."""
     return TickerResolver(client)
 
@@ -46,7 +47,14 @@ def company_list_response(
 ) -> dict[str, Any]:
     """Sample company list response."""
     if companies is None:
-        companies = [{"cik": "0000320193", "ticker": "AAPL", "name": "Apple Inc."}]
+        companies = [
+            {
+                "cik": "0000320193",
+                "ticker": "AAPL",
+                "name": "Apple Inc.",
+                "company_tier": "sp500",
+            }
+        ]
     return {
         "data": companies,
         "pagination": {"page": 1, "per_page": 25, "total": len(companies)},

@@ -5,8 +5,8 @@ from __future__ import annotations
 import httpx
 import pytest
 import respx
+from thesma.errors import ThesmaError
 
-from thesma_mcp.client import ThesmaAPIError
 from thesma_mcp.resolver import TickerResolver
 
 from .conftest import company_list_response
@@ -49,5 +49,5 @@ async def test_unknown_ticker(resolver: TickerResolver, mock_api: respx.MockRout
     mock_api.get("/v1/us/sec/companies").mock(
         return_value=httpx.Response(200, json={"data": [], "pagination": {"page": 1, "per_page": 25, "total": 0}})
     )
-    with pytest.raises(ThesmaAPIError, match="No company found for ticker 'ZZZZ'"):
+    with pytest.raises(ThesmaError, match="No company found for ticker 'ZZZZ'"):
         await resolver.resolve("ZZZZ")

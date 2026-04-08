@@ -5,8 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 from mcp.server.fastmcp import Context
+from thesma._generated.models import FundListItem
+from thesma._types import PaginatedResponse
+from thesma.errors import ThesmaError
 
-from thesma_mcp.client import ThesmaAPIError
 from thesma_mcp.formatters import format_currency, format_number, format_table
 from thesma_mcp.resolver import CIK_PATTERN
 from thesma_mcp.server import AppContext, mcp
@@ -21,13 +23,17 @@ async def _resolve_fund_cik(app: AppContext, fund_name: str) -> str:
     if CIK_PATTERN.match(fund_name):
         return fund_name
 
-    response = await app.client.get("/v1/us/sec/funds", params={"search": fund_name})
-    data = response.get("data", [])
-    if not data:
+    response = await app.client.request(
+        "GET",
+        "/v1/us/sec/funds",
+        params={"search": fund_name},
+        response_model=PaginatedResponse[FundListItem],
+    )
+    if response is None or not response.data:
         msg = f"No fund found matching '{fund_name}'. Try a different name or use the fund's CIK directly."
-        raise ThesmaAPIError(msg)
+        raise ThesmaError(msg)
 
-    cik: str = data[0]["cik"]
+    cik: str = response.data[0].cik
     return cik
 
 
@@ -46,8 +52,20 @@ async def search_funds(
     app = _get_ctx(ctx)
     limit = min(limit, 50)
 
-    response = await app.client.get("/v1/us/sec/funds", params={"search": query, "per_page": limit})
-    funds = response.get("data", [])
+    try:
+        response = await app.client.request(
+            "GET",
+            "/v1/us/sec/funds",
+            params={"search": query, "per_page": limit},
+            response_model=PaginatedResponse[FundListItem],
+        )
+    except ThesmaError as e:
+        return str(e)
+
+    if response is None:
+        return f'No funds found matching "{query}". Try a different name.'
+
+    funds = response.data
 
     if not funds:
         return f'No funds found matching "{query}". Try a different name.'
@@ -56,7 +74,7 @@ async def search_funds(
     lines = [f'Found {count} fund{"" if count == 1 else "s"} matching "{query}"', ""]
 
     headers = ["#", "CIK", "Fund Name"]
-    rows = [[str(i), f.get("cik", ""), f.get("name", "")] for i, f in enumerate(funds, 1)]
+    rows = [[str(i), f.cik, f.name] for i, f in enumerate(funds, 1)]
 
     lines.append(format_table(headers, rows, alignments=["r", "l", "l"]))
     lines.append("")
@@ -82,44 +100,50 @@ async def get_institutional_holders(
 
     try:
         cik = await app.resolver.resolve(ticker)
-    except ThesmaAPIError as e:
+    except ThesmaError as e:
         return str(e)
-
-    params: dict[str, Any] = {"per_page": limit}
-    if quarter:
-        params["quarter"] = quarter
 
     try:
-        response = await app.client.get(f"/v1/us/sec/companies/{cik}/institutional-holders", params=params)
-    except ThesmaAPIError as e:
+        response = await app.client.holdings.holders(cik, quarter=quarter, per_page=limit)  # type: ignore[misc]
+    except ThesmaError as e:
         return str(e)
 
-    holders = response.get("data", [])
-    pagination = response.get("pagination", {})
-    total = pagination.get("total", len(holders))
+    holders = response.data
+    total = response.pagination.total
 
     if not holders:
         return "No institutional holders found for this company."
 
-    company_name = holders[0].get("company_name", ticker.upper()) if holders else ticker.upper()
-    company_ticker = holders[0].get("company_ticker", ticker.upper()) if holders else ticker.upper()
-    q_label = quarter or holders[0].get("quarter", "Latest") if holders else "Latest"
+    # Try to get company name from a separate lookup
+    try:
+        company_resp = await app.client.companies.get(cik)  # type: ignore[misc]
+        comp_data = company_resp.data
+        company_name = getattr(comp_data, "name", ticker.upper())
+        company_ticker_str = getattr(comp_data, "ticker", ticker.upper())
+    except ThesmaError:
+        company_name = ticker.upper()
+        company_ticker_str = ticker.upper()
 
-    title = f"{company_name} ({company_ticker}) — Top Institutional Holders, {q_label} ({len(holders)} of {total:,})"
+    q_label = quarter or "Latest"
+
+    title = (
+        f"{company_name} ({company_ticker_str}) — Top Institutional Holders, {q_label} ({len(holders)} of {total:,})"
+    )
 
     headers = ["#", "Fund", "Shares", "Market Value", "Discretion"]
     rows = []
     for i, h in enumerate(holders, 1):
-        shares = h.get("shares")
-        value = h.get("market_value")
-        discretion = h.get("discretion", "").title() if h.get("discretion") else ""
+        shares = h.shares
+        value = h.market_value
+        disc = h.discretion
+        discretion_str = str(disc.value).title() if disc and hasattr(disc, "value") else str(disc or "").title()
         rows.append(
             [
                 str(i),
-                h.get("fund_name", ""),
+                h.fund_name or "",
                 format_number(shares, decimals=1) if shares is not None else "N/A",
                 format_currency(value) if value is not None else "N/A",
-                discretion,
+                discretion_str,
             ]
         )
 
@@ -150,29 +174,22 @@ async def get_fund_holdings(
 
     try:
         fund_cik = await _resolve_fund_cik(app, fund_name)
-    except ThesmaAPIError as e:
+    except ThesmaError as e:
         return str(e)
-
-    params: dict[str, Any] = {"per_page": limit}
-    if quarter:
-        params["quarter"] = quarter
-    if position_type != "all":
-        params["position_type"] = position_type
 
     try:
-        response = await app.client.get(f"/v1/us/sec/funds/{fund_cik}/holdings", params=params)
-    except ThesmaAPIError as e:
+        response = await app.client.holdings.fund_holdings(fund_cik, quarter=quarter, per_page=limit)  # type: ignore[misc]
+    except ThesmaError as e:
         return str(e)
 
-    holdings = response.get("data", [])
-    pagination = response.get("pagination", {})
-    total = pagination.get("total", len(holdings))
+    holdings = response.data
+    total = response.pagination.total
 
     if not holdings:
         return "No holdings found for this fund."
 
-    fund_display = holdings[0].get("fund_name", fund_name.upper()) if holdings else fund_name.upper()
-    q_label = quarter or holdings[0].get("quarter", "Latest") if holdings else "Latest"
+    fund_display = fund_name.upper()
+    q_label = quarter or "Latest"
     type_label = position_type.title() if position_type != "all" else "All"
 
     title = f"{fund_display} — Portfolio Holdings, {q_label} ({type_label}, {len(holdings)} of {total:,})"
@@ -180,13 +197,13 @@ async def get_fund_holdings(
     headers = ["#", "Ticker", "Company", "Shares", "Market Value"]
     rows = []
     for i, h in enumerate(holdings, 1):
-        shares = h.get("shares")
-        value = h.get("market_value")
+        shares = h.shares
+        value = h.market_value
         rows.append(
             [
                 str(i),
-                h.get("ticker", h.get("company_ticker", "")),
-                h.get("company_name", h.get("name", "")),
+                h.held_company_ticker or "",
+                h.held_company_name or "",
                 format_number(shares, decimals=1) if shares is not None else "N/A",
                 format_currency(value) if value is not None else "N/A",
             ]
@@ -225,47 +242,41 @@ async def get_holding_changes(
     app = _get_ctx(ctx)
     limit = min(limit, 50)
 
-    params: dict[str, Any] = {"per_page": limit}
-    if quarter:
-        params["quarter"] = quarter
-    if change:
-        params["change"] = change
-
     if ticker:
         try:
             cik = await app.resolver.resolve(ticker)
-        except ThesmaAPIError as e:
+        except ThesmaError as e:
             return str(e)
         try:
-            response = await app.client.get(f"/v1/us/sec/companies/{cik}/institutional-changes", params=params)
-        except ThesmaAPIError as e:
+            response = await app.client.holdings.holder_changes(cik, per_page=limit)  # type: ignore[misc]
+        except ThesmaError as e:
             return str(e)
         return _format_changes_by_ticker(response, ticker)
     else:
         assert fund_name is not None
         try:
             fund_cik = await _resolve_fund_cik(app, fund_name)
-        except ThesmaAPIError as e:
+        except ThesmaError as e:
             return str(e)
         try:
-            response = await app.client.get(f"/v1/us/sec/funds/{fund_cik}/holding-changes", params=params)
-        except ThesmaAPIError as e:
+            response = await app.client.holdings.fund_changes(fund_cik, per_page=limit)  # type: ignore[misc]
+        except ThesmaError as e:
             return str(e)
         return _format_changes_by_fund(response, fund_name)
 
 
-def _format_changes_by_ticker(response: dict[str, Any], ticker: str) -> str:
+def _format_changes_by_ticker(response: Any, ticker: str) -> str:
     """Format holding changes for a company (who's buying/selling?)."""
-    changes = response.get("data", [])
-    pagination = response.get("pagination", {})
-    total = pagination.get("total", len(changes))
+    changes = response.data
+    total = response.pagination.total
 
     if not changes:
         return "No position changes found for this company in the selected quarter."
 
-    company_name = changes[0].get("company_name", ticker.upper())
-    company_ticker = changes[0].get("company_ticker", ticker.upper())
-    q_label = changes[0].get("quarter", "Latest")
+    first = changes[0]
+    company_name = ticker.upper()
+    company_ticker = ticker.upper()
+    q_label = first.quarter
 
     count_shown = len(changes)
     title = (
@@ -275,14 +286,15 @@ def _format_changes_by_ticker(response: dict[str, Any], ticker: str) -> str:
     headers = ["#", "Fund", "Change", "Shares Delta", "% Change", "Current Value"]
     rows = []
     for i, c in enumerate(changes, 1):
+        change_type = str(c.change_type.value) if hasattr(c.change_type, "value") else str(c.change_type)
         rows.append(
             [
                 str(i),
-                c.get("fund_name", ""),
-                _change_label(c.get("change_type", "")),
-                _format_delta(c.get("shares_delta"), c.get("change_type", "")),
-                _format_pct_change(c.get("percent_change"), c.get("change_type", "")),
-                _format_current_value(c.get("current_value"), c.get("change_type", "")),
+                c.fund_name or "",
+                _change_label(change_type),
+                _format_delta(c.share_delta, change_type),
+                _format_pct_change(c.pct_change, change_type),
+                _format_current_value(c.current_market_value, change_type),
             ]
         )
 
@@ -294,32 +306,33 @@ def _format_changes_by_ticker(response: dict[str, Any], ticker: str) -> str:
     return "\n".join(lines)
 
 
-def _format_changes_by_fund(response: dict[str, Any], fund_name: str) -> str:
+def _format_changes_by_fund(response: Any, fund_name: str) -> str:
     """Format holding changes for a fund (what's the fund buying/selling?)."""
-    changes = response.get("data", [])
-    pagination = response.get("pagination", {})
-    total = pagination.get("total", len(changes))
+    changes = response.data
+    total = response.pagination.total
 
     if not changes:
         return "No position changes found for this fund in the selected quarter."
 
-    fund_display = changes[0].get("fund_name", fund_name.upper())
-    q_label = changes[0].get("quarter", "Latest")
+    first = changes[0]
+    fund_display = fund_name.upper()
+    q_label = first.quarter
 
     title = f"{fund_display} — Position Changes, {q_label} ({len(changes)} of {total:,})"
 
     headers = ["#", "Ticker", "Company", "Change", "Shares Delta", "% Change", "Current Value"]
     rows = []
     for i, c in enumerate(changes, 1):
+        change_type = str(c.change_type.value) if hasattr(c.change_type, "value") else str(c.change_type)
         rows.append(
             [
                 str(i),
-                c.get("ticker", c.get("company_ticker", "")),
-                c.get("company_name", ""),
-                _change_label(c.get("change_type", "")),
-                _format_delta(c.get("shares_delta"), c.get("change_type", "")),
-                _format_pct_change(c.get("percent_change"), c.get("change_type", "")),
-                _format_current_value(c.get("current_value"), c.get("change_type", "")),
+                c.held_company_ticker or "",
+                c.held_company_name or "",
+                _change_label(change_type),
+                _format_delta(c.share_delta, change_type),
+                _format_pct_change(c.pct_change, change_type),
+                _format_current_value(c.current_market_value, change_type),
             ]
         )
 
@@ -345,7 +358,7 @@ def _change_label(change_type: str) -> str:
 def _format_delta(shares_delta: float | int | None, change_type: str) -> str:
     """Format shares delta with +/- prefix."""
     if shares_delta is None:
-        return "—"
+        return "\u2014"
     formatted = format_number(abs(shares_delta), decimals=1)
     if change_type in ("new", "increased"):
         return f"+{formatted}"
@@ -355,19 +368,19 @@ def _format_delta(shares_delta: float | int | None, change_type: str) -> str:
 
 
 def _format_pct_change(pct: float | None, change_type: str) -> str:
-    """Format percentage change, showing — for new positions."""
+    """Format percentage change, showing \u2014 for new positions."""
     if change_type == "new":
-        return "—"
+        return "\u2014"
     if pct is None:
-        return "—"
+        return "\u2014"
     sign = "+" if pct > 0 else ""
     return f"{sign}{pct:.1f}%"
 
 
 def _format_current_value(value: float | int | None, change_type: str) -> str:
-    """Format current value, showing — for exited positions."""
+    """Format current value, showing \u2014 for exited positions."""
     if change_type == "exited":
-        return "—"
+        return "\u2014"
     if value is None:
         return "N/A"
     return format_currency(value)

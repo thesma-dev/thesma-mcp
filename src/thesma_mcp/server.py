@@ -10,8 +10,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from thesma.client import AsyncThesmaClient
 
-from thesma_mcp.client import ThesmaClient
 from thesma_mcp.resolver import TickerResolver
 
 
@@ -19,14 +19,15 @@ from thesma_mcp.resolver import TickerResolver
 class AppContext:
     """Application context holding shared resources."""
 
-    client: ThesmaClient
+    client: AsyncThesmaClient
     resolver: TickerResolver
 
 
 @asynccontextmanager
 async def app_lifespan(server: Any) -> AsyncIterator[AppContext]:
     """Create and tear down shared resources."""
-    client = ThesmaClient()
+    api_key = os.environ.get("THESMA_API_KEY", "")
+    client = AsyncThesmaClient(api_key=api_key)
     resolver = TickerResolver(client)
     try:
         yield AppContext(client=client, resolver=resolver)
