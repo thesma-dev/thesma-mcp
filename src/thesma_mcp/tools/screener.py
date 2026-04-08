@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from mcp.server.fastmcp import Context
+from thesma.errors import ThesmaError
 
 from thesma_mcp.formatters import format_percent, format_table
 from thesma_mcp.server import AppContext, mcp
@@ -172,10 +173,16 @@ def _pick_display_columns(params: dict[str, Any], sort_field: str | None) -> lis
     return columns
 
 
-def _get_column_value(company: dict[str, Any], col: str) -> str:
+def _get_column_value(company: Any, col: str) -> str:
     """Extract and format a column value from a screener result."""
-    ratios = company.get("ratios", {}) or {}
-    val = ratios.get(col)
+    # ScreenerResultItem uses extra="allow" — ratios is a RatioValues model or dict
+    ratios = getattr(company, "ratios", None)
+    if ratios is None:
+        return "N/A"
+    if isinstance(ratios, dict):
+        val = ratios.get(col)
+    else:
+        val = getattr(ratios, col, None)
     if val is None:
         return "N/A"
     return format_percent(val)
@@ -256,7 +263,7 @@ async def screen_companies(
     # Cap limit
     limit = min(limit, 50)
 
-    # Build API params — only include non-None values
+    # Build local params dict for summary/display logic
     local_params: dict[str, Any] = {
         "min_revenue": min_revenue,
         "min_net_income": min_net_income,
@@ -289,21 +296,48 @@ async def screen_companies(
         "min_comp_to_market_ratio": min_comp_to_market_ratio,
     }
 
-    api_params: dict[str, Any] = {"per_page": limit}
-    for k, v in local_params.items():
-        if v is not None:
-            # Only send boolean signals when true
-            if k in ("has_insider_buying", "has_institutional_increase"):
-                if v:
-                    api_params[k] = "true"
-            else:
-                api_params[k] = v
+    # Convert booleans for API
+    api_has_insider = has_insider_buying if has_insider_buying else None
+    api_has_institutional = has_institutional_increase if has_institutional_increase else None
 
-    response = await app.client.get("/v1/us/sec/screener", params=api_params)
+    try:
+        response = await app.client.screener.screen(
+            min_revenue=min_revenue,
+            min_net_income=min_net_income,
+            min_gross_margin=min_gross_margin,
+            max_gross_margin=max_gross_margin,
+            min_operating_margin=min_operating_margin,
+            min_net_margin=min_net_margin,
+            min_revenue_growth=min_revenue_growth,
+            min_eps_growth=min_eps_growth,
+            min_return_on_equity=min_return_on_equity,
+            min_return_on_assets=min_return_on_assets,
+            max_debt_to_equity=max_debt_to_equity,
+            min_current_ratio=min_current_ratio,
+            min_interest_coverage=min_interest_coverage,
+            tier=tier,
+            sic=sic,
+            has_insider_buying=api_has_insider,
+            has_institutional_increase=api_has_institutional,
+            min_industry_quits_rate=min_industry_quits_rate,
+            max_industry_quits_rate=max_industry_quits_rate,
+            min_industry_openings_rate=min_industry_openings_rate,
+            max_industry_openings_rate=max_industry_openings_rate,
+            sort_by=sort,
+            order=order,
+            industry_hiring_trend=industry_hiring_trend,
+            min_industry_employment_growth=min_industry_employment_growth,
+            max_industry_employment_growth=max_industry_employment_growth,
+            min_industry_wage_growth=min_industry_wage_growth,
+            min_hq_county_wage_growth=min_hq_county_wage_growth,
+            min_comp_to_market_ratio=min_comp_to_market_ratio,
+            per_page=limit,
+        )
+    except ThesmaError as e:
+        return str(e)
 
-    data = response.get("data", [])
-    pagination = response.get("pagination", {})
-    total = pagination.get("total", len(data))
+    data = response.data
+    total = response.pagination.total
 
     if not data:
         return "No companies matched the specified criteria. Try broadening your filters."
@@ -315,7 +349,7 @@ async def screen_companies(
     display_cols = _pick_display_columns(local_params, sort)
 
     # Detect whether BLS filters are active
-    bls_active = any(api_params.get(k) is not None for k in _BLS_FILTER_KEYS)
+    bls_active = any(local_params.get(k) is not None for k in _BLS_FILTER_KEYS)
 
     # Build table
     headers = ["#", "Ticker", "Company"]
@@ -336,23 +370,35 @@ async def screen_companies(
 
     rows: list[list[str]] = []
     for i, company in enumerate(data, 1):
-        row = [str(i), company.get("ticker", ""), company.get("name", "")]
+        # ScreenerResultItem uses extra="allow"
+        tkr = getattr(company, "ticker", "")
+        name = getattr(company, "name", "")
+        row = [str(i), tkr or "", name or ""]
         for col in display_cols:
             row.append(_get_column_value(company, col))
         if bls_active:
-            bls = company.get("bls", {}) or {}
-            row.append(str(bls.get("industry", "")))
-            row.append(str(bls.get("hiring_trend", "")))
-            eg = bls.get("employment_growth")
-            row.append(f"{eg:.1f}%" if eg is not None else "N/A")
-            cr = bls.get("comp_ratio")
-            row.append(f"{cr:.1f}x" if cr is not None else "N/A")
+            bls = getattr(company, "bls", None) or {}
+            if isinstance(bls, dict):
+                row.append(str(bls.get("industry", "")))
+                row.append(str(bls.get("hiring_trend", "")))
+                eg = bls.get("employment_growth")
+                row.append(f"{eg:.1f}%" if eg is not None else "N/A")
+                cr = bls.get("comp_ratio")
+                row.append(f"{cr:.1f}x" if cr is not None else "N/A")
+            else:
+                row.extend(["", "", "N/A", "N/A"])
         if has_jolts_filter:
-            labor = company.get("labor_context", {}) or {}
-            row.append(format_percent(labor.get("industry_quits_rate")))
-            row.append(format_percent(labor.get("industry_openings_rate")))
-            tightness = labor.get("labour_market_tightness")
-            row.append(f"{tightness:.2f}" if tightness is not None else "N/A")
+            labor = getattr(company, "labor_context", None) or {}
+            if isinstance(labor, dict):
+                row.append(format_percent(labor.get("industry_quits_rate")))
+                row.append(format_percent(labor.get("industry_openings_rate")))
+                tightness = labor.get("labour_market_tightness")
+                row.append(f"{tightness:.2f}" if tightness is not None else "N/A")
+            else:
+                row.append(format_percent(getattr(labor, "industry_quits_rate", None)))
+                row.append(format_percent(getattr(labor, "industry_openings_rate", None)))
+                tightness = getattr(labor, "labour_market_tightness", None)
+                row.append(f"{tightness:.2f}" if tightness is not None else "N/A")
         rows.append(row)
 
     table = format_table(headers, rows, alignments)

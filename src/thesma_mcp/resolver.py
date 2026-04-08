@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING, Any
 
-from thesma_mcp.client import ThesmaAPIError, ThesmaClient
+from thesma.errors import ThesmaError
+
+if TYPE_CHECKING:
+    from thesma.client import AsyncThesmaClient
 
 CIK_PATTERN = re.compile(r"^0\d{9}$")
 
@@ -12,8 +16,8 @@ CIK_PATTERN = re.compile(r"^0\d{9}$")
 class TickerResolver:
     """Resolves stock tickers to SEC CIKs, caching results in memory."""
 
-    def __init__(self, client: ThesmaClient) -> None:
-        self._client = client
+    def __init__(self, client: Any) -> None:
+        self._client: AsyncThesmaClient = client
         self._cache: dict[str, str] = {}
 
     async def resolve(self, ticker_or_cik: str) -> str:
@@ -29,12 +33,16 @@ class TickerResolver:
         if cache_key in self._cache:
             return self._cache[cache_key]
 
-        response = await self._client.get("/v1/us/sec/companies", params={"ticker": cache_key})
-        data = response.get("data", [])
-        if not data:
+        try:
+            response = await self._client.companies.list(ticker=cache_key)
+        except ThesmaError as e:
             msg = f"No company found for ticker '{ticker_or_cik}'. Try searching with search_companies."
-            raise ThesmaAPIError(msg)
+            raise ThesmaError(msg) from e
 
-        cik: str = data[0]["cik"]
+        if not response.data:
+            msg = f"No company found for ticker '{ticker_or_cik}'. Try searching with search_companies."
+            raise ThesmaError(msg)
+
+        cik: str = response.data[0].cik
         self._cache[cache_key] = cik
         return cik

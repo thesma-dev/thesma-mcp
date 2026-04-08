@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from mcp.server.fastmcp import Context
+from thesma.errors import ThesmaError
 
-from thesma_mcp.client import ThesmaAPIError
 from thesma_mcp.formatters import format_table
 from thesma_mcp.server import AppContext, mcp
 
@@ -32,30 +32,22 @@ async def explore_bls_metrics(
     """Discover available BLS metrics."""
     app = _get_ctx(ctx)
 
-    params: dict[str, Any] = {}
-    if category is not None:
-        params["category"] = category
-    if source is not None:
-        params["source"] = source
-    if query is not None:
-        params["search"] = query
-
     try:
-        response = await app.client.get("/v1/us/bls/metrics", params=params)
-    except ThesmaAPIError as e:
+        response = await app.client.bls.metrics(category=category, source=source, search=query)
+    except ThesmaError as e:
         return str(e)
 
-    data: list[dict[str, Any]] = response.get("data", [])
+    data = response.data
 
     if not data:
         return "No metrics found."
 
     rows = [
         [
-            str(d.get("canonical_name", "")),
-            str(d.get("display_name", "")),
-            str(d.get("category", "")),
-            str(d.get("source_dataset", "")),
+            d.canonical_name,
+            d.display_name,
+            d.category,
+            d.source_dataset,
         ]
         for d in data
     ]

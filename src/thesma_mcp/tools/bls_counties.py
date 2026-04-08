@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from mcp.server.fastmcp import Context
+from thesma.errors import ThesmaError
 
-from thesma_mcp.client import ThesmaAPIError
 from thesma_mcp.formatters import format_currency, format_number, format_table
 from thesma_mcp.server import AppContext, mcp
 
@@ -36,21 +36,18 @@ async def get_county_employment(
 
     fips = fips.zfill(5)
 
-    params: dict[str, Any] = {
-        "industry": industry or "10",
-        "ownership": ownership or "private",
-    }
-    if year is not None:
-        params["year"] = year
-    if quarter is not None:
-        params["quarter"] = quarter
-
     try:
-        response = await app.client.get(f"/v1/us/bls/counties/{fips}/employment", params=params)
-    except ThesmaAPIError as e:
+        response = await app.client.bls.county_employment(
+            fips,
+            industry=industry or "10",
+            ownership=ownership or "private",
+            year=year,
+            quarter=quarter,
+        )
+    except ThesmaError as e:
         return str(e)
 
-    data: list[dict[str, Any]] = response.get("data", [])
+    data = response.data
 
     if not data:
         return f"No employment data available for county FIPS {fips}."
@@ -58,15 +55,16 @@ async def get_county_employment(
     headers = ["Year", "Qtr", "Month 1", "Month 2", "Month 3", "YoY %", "Establishments"]
     rows: list[list[str]] = []
     for d in data:
+        emp_yoy = getattr(d, "employment_yoy_pct", None)
         rows.append(
             [
-                str(d.get("year", "")),
-                str(d.get("quarter", "")),
-                format_number(d.get("month1_employment")),
-                format_number(d.get("month2_employment")),
-                format_number(d.get("month3_employment")),
-                f"{d['employment_yoy_pct']:.1f}%" if d.get("employment_yoy_pct") is not None else "N/A",
-                format_number(d.get("establishment_count")),
+                str(d.year),
+                str(d.quarter),
+                format_number(d.month1_employment),
+                format_number(d.month2_employment),
+                format_number(d.month3_employment),
+                f"{emp_yoy:.1f}%" if emp_yoy is not None else "N/A",
+                format_number(getattr(d, "establishment_count", None)),
             ]
         )
 
@@ -98,35 +96,28 @@ async def get_county_wages(
 
     fips = fips.zfill(5)
 
-    params: dict[str, Any] = {}
-    if industry is not None:
-        params["industry"] = industry
-    if ownership is not None:
-        params["ownership"] = ownership
-    if year is not None:
-        params["year"] = year
-    if quarter is not None:
-        params["quarter"] = quarter
-
     try:
-        response = await app.client.get(f"/v1/us/bls/counties/{fips}/wages", params=params)
-    except ThesmaAPIError as e:
+        result = await app.client.bls.county_wages(
+            fips,
+            industry=industry or "10",
+            ownership=ownership or "private",
+            year=year,
+            quarter=quarter,
+        )
+    except ThesmaError as e:
         return str(e)
 
-    data: dict[str, Any] = response.get("data", {})
+    data = result.data
 
-    if not data:
-        return f"No wage data available for county FIPS {fips}."
-
-    area_fips = data.get("area_fips", fips)
-    own = data.get("ownership", "")
-    ind_code = data.get("industry_code", "")
-    avg_weekly_wage = data.get("avg_weekly_wage")
-    total_quarterly_wages = data.get("total_quarterly_wages")
-    wage_yoy = data.get("wage_yoy_pct")
-    lq_emp = data.get("location_quotient_employment")
-    lq_wages = data.get("location_quotient_wages")
-    lq_estab = data.get("location_quotient_establishments")
+    area_fips = getattr(data, "area_fips", fips)
+    own = getattr(data, "ownership", "")
+    ind_code = getattr(data, "industry_code", "")
+    avg_weekly_wage = getattr(data, "avg_weekly_wage", None)
+    total_quarterly_wages = getattr(data, "total_quarterly_wages", None)
+    wage_yoy = getattr(data, "wage_yoy_pct", None)
+    lq_emp = getattr(data, "location_quotient_employment", None)
+    lq_wages = getattr(data, "location_quotient_wages", None)
+    lq_estab = getattr(data, "location_quotient_establishments", None)
 
     lines = [
         f"County Wages — FIPS {area_fips}",

@@ -6,8 +6,9 @@ import re
 from typing import Any
 
 from mcp.server.fastmcp import Context
+from thesma._generated.models import JoltsMeasureValue
+from thesma.errors import ThesmaError
 
-from thesma_mcp.client import ThesmaAPIError
 from thesma_mcp.formatters import format_number, format_table
 from thesma_mcp.server import AppContext, mcp
 
@@ -46,8 +47,21 @@ def _format_measure(value: Any) -> str:
     """Format a single JOLTS measure value as 'Level / Rate%'.
 
     The API returns level in thousands, so we multiply by 1000 for display.
+    Handles JoltsMeasureValue model, dict, float, or None.
     """
     if value is None:
+        return "N/A"
+    if isinstance(value, JoltsMeasureValue):
+        level = value.level
+        rate = value.rate
+        level_str = format_number(level * 1000) if level is not None else "N/A"
+        rate_str = f"{rate:.1f}%" if rate is not None else "N/A"
+        if level is not None and rate is not None:
+            return f"{level_str} / {rate_str}"
+        if level is not None:
+            return level_str
+        if rate is not None:
+            return rate_str
         return "N/A"
     if isinstance(value, dict):
         level = value.get("level")
@@ -64,16 +78,16 @@ def _format_measure(value: Any) -> str:
     return format_number(float(value))
 
 
-def _format_latest(data: dict[str, Any], measures: list[tuple[str, str]], title: str) -> str:
+def _format_latest(data: Any, measures: list[tuple[str, str]], title: str) -> str:
     """Format a latest observation as key-value pairs."""
-    period = data.get("period", "Unknown")
-    adjustment = data.get("adjustment", "sa")
+    period = getattr(data, "period", "Unknown")
+    adjustment = getattr(data, "adjustment", "sa")
     adj_label = "Seasonally adjusted" if adjustment == "sa" else "Not seasonally adjusted"
 
     lines = [title, "", f"Period: {period}", f"Adjustment: {adj_label}", ""]
 
     for key, label in measures:
-        val = data.get(key)
+        val = getattr(data, key, None)
         lines.append(f"{label}: {_format_measure(val)}")
 
     lines.append("")
@@ -81,7 +95,7 @@ def _format_latest(data: dict[str, Any], measures: list[tuple[str, str]], title:
     return "\n".join(lines)
 
 
-def _format_time_series(data_list: list[dict[str, Any]], measures: list[tuple[str, str]], title: str) -> str:
+def _format_time_series(data_list: list[Any], measures: list[tuple[str, str]], title: str) -> str:
     """Format time series data as a table."""
     headers = ["Period"]
     alignments: list[str] = ["l"]
@@ -91,9 +105,9 @@ def _format_time_series(data_list: list[dict[str, Any]], measures: list[tuple[st
 
     rows: list[list[str]] = []
     for point in data_list:
-        row = [point.get("period", "")]
+        row = [getattr(point, "period", "")]
         for key, _ in measures:
-            row.append(_format_measure(point.get(key)))
+            row.append(_format_measure(getattr(point, key, None)))
         rows.append(row)
 
     table = format_table(headers, rows, alignments)
@@ -102,28 +116,6 @@ def _format_time_series(data_list: list[dict[str, Any]], measures: list[tuple[st
     lines = [f"{title} ({count} observations)", "", table, ""]
     lines.append("Source: BLS Job Openings and Labor Turnover Survey (JOLTS).")
     return "\n".join(lines)
-
-
-def _build_params(
-    from_date: str | None,
-    to_date: str | None,
-    adjustment: str | None,
-    measures: str | None = None,
-    per_page: int | None = None,
-) -> dict[str, Any]:
-    """Build API query params, only including non-None values."""
-    params: dict[str, Any] = {}
-    if from_date:
-        params["from"] = from_date
-    if to_date:
-        params["to"] = to_date
-    if adjustment:
-        params["adjustment"] = adjustment
-    if measures:
-        params["measures"] = measures
-    if per_page is not None:
-        params["per_page"] = per_page
-    return params
 
 
 @mcp.tool(
@@ -156,31 +148,29 @@ async def get_industry_turnover(
 
     try:
         if from_date and to_date:
-            params = _build_params(from_date, to_date, adjustment, measures)
-            response = await app.client.get(f"/v1/us/bls/industries/{naics}/turnover", params=params)
-            data_list = response.get("data", [])
+            response = await app.client.bls.turnover(
+                naics, from_date=from_date, to_date=to_date, adjustment=adjustment or "sa", measures=measures
+            )
+            data_list = response.data
             if not data_list:
                 return f"No JOLTS turnover data available for NAICS {naics} in the requested period."
 
             first = data_list[0]
-            jolts_name = first.get("jolts_industry_name", "")
-            jolts_code = first.get("jolts_industry_code", "")
+            jolts_name = getattr(first, "jolts_industry_name", "")
+            jolts_code = getattr(first, "jolts_industry_code", "")
             title = f"NAICS {naics} \u2192 JOLTS {jolts_name} ({jolts_code})"
 
             return _format_time_series(data_list, display_measures, title)
         else:
-            params = _build_params(None, None, adjustment, measures)
-            response = await app.client.get(f"/v1/us/bls/industries/{naics}/turnover/latest", params=params)
-            data = response.get("data", {})
-            if not data:
-                return f"No JOLTS turnover data available for NAICS {naics}."
+            result = await app.client.bls.turnover_latest(naics, adjustment=adjustment or "sa", measures=measures)
+            data = result.data
 
-            jolts_name = data.get("jolts_industry_name", "")
-            jolts_code = data.get("jolts_industry_code", "")
+            jolts_name = getattr(data, "jolts_industry_name", "")
+            jolts_code = getattr(data, "jolts_industry_code", "")
             title = f"NAICS {naics} \u2192 JOLTS {jolts_name} ({jolts_code})"
 
             return _format_latest(data, display_measures, title)
-    except ThesmaAPIError as e:
+    except ThesmaError as e:
         return str(e)
 
 
@@ -207,22 +197,22 @@ async def get_state_turnover(
 
     try:
         if from_date and to_date:
-            params = _build_params(from_date, to_date, adjustment)
-            response = await app.client.get(f"/v1/us/bls/states/{fips}/turnover", params=params)
-            data_list = response.get("data", [])
+            response = await app.client.bls.state_turnover(
+                fips, from_date=from_date, to_date=to_date, adjustment=adjustment or "sa"
+            )
+            data_list = response.data
             if not data_list:
                 return f"No JOLTS turnover data available for state FIPS {fips} in the requested period."
             title = f"JOLTS Turnover \u2014 State FIPS {fips}"
             return _format_time_series(data_list, _STATE_REGION_MEASURES, title)
         else:
-            params = _build_params(None, None, adjustment, per_page=1)
-            response = await app.client.get(f"/v1/us/bls/states/{fips}/turnover", params=params)
-            data_list = response.get("data", [])
+            response = await app.client.bls.state_turnover(fips, adjustment=adjustment or "sa", per_page=1)
+            data_list = response.data
             if not data_list:
                 return f"No JOLTS turnover data available for state FIPS {fips}."
             title = f"JOLTS Turnover \u2014 State FIPS {fips}"
             return _format_latest(data_list[0], _STATE_REGION_MEASURES, title)
-    except ThesmaAPIError as e:
+    except ThesmaError as e:
         return str(e)
 
 
@@ -248,20 +238,20 @@ async def get_regional_turnover(
 
     try:
         if from_date and to_date:
-            params = _build_params(from_date, to_date, adjustment)
-            response = await app.client.get(f"/v1/us/bls/regions/{region}/turnover", params=params)
-            data_list = response.get("data", [])
+            response = await app.client.bls.regional_turnover(
+                region, from_date=from_date, to_date=to_date, adjustment=adjustment or "sa"
+            )
+            data_list = response.data
             if not data_list:
                 return f"No JOLTS turnover data available for {region} region in the requested period."
             title = f"JOLTS Turnover \u2014 {region.title()} Region"
             return _format_time_series(data_list, _STATE_REGION_MEASURES, title)
         else:
-            params = _build_params(None, None, adjustment, per_page=1)
-            response = await app.client.get(f"/v1/us/bls/regions/{region}/turnover", params=params)
-            data_list = response.get("data", [])
+            response = await app.client.bls.regional_turnover(region, adjustment=adjustment or "sa", per_page=1)
+            data_list = response.data
             if not data_list:
                 return f"No JOLTS turnover data available for {region} region."
             title = f"JOLTS Turnover \u2014 {region.title()} Region"
             return _format_latest(data_list[0], _STATE_REGION_MEASURES, title)
-    except ThesmaAPIError as e:
+    except ThesmaError as e:
         return str(e)

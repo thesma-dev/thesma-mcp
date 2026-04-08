@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from mcp.server.fastmcp import Context
+from thesma.errors import ThesmaError
 
-from thesma_mcp.client import ThesmaAPIError
 from thesma_mcp.formatters import format_percent
 from thesma_mcp.server import AppContext, mcp
 
@@ -122,28 +122,21 @@ async def get_ratios(
 
     try:
         cik = await app.resolver.resolve(ticker)
-    except ThesmaAPIError as e:
+    except ThesmaError as e:
         return str(e)
-
-    params: dict[str, Any] = {"period": period}
-    if year is not None:
-        params["year"] = year
-    if quarter is not None:
-        params["quarter"] = quarter
 
     try:
-        response = await app.client.get(f"/v1/us/sec/companies/{cik}/ratios", params=params)
-    except ThesmaAPIError as e:
+        result = await app.client.ratios.get(cik, period=period, year=year, quarter=quarter)
+    except ThesmaError as e:
         return str(e)
 
-    data = response.get("data", {})
-    if not data:
-        return "No ratio data found for this company."
+    data = result.data
+    ratios = data.ratios
 
-    company_name = data.get("company_name", ticker.upper())
-    company_ticker = data.get("ticker", ticker.upper())
-    fiscal_year = data.get("fiscal_year", "")
-    fiscal_quarter = data.get("fiscal_quarter")
+    company_name = data.company.name if data.company else ticker.upper()
+    company_ticker = data.company.ticker if data.company and data.company.ticker else ticker.upper()
+    fiscal_year = data.fiscal_year
+    fiscal_quarter = data.fiscal_quarter
 
     period_label = f"FY {fiscal_year}" if period == "annual" else f"Q{fiscal_quarter} {fiscal_year}"
 
@@ -152,7 +145,7 @@ async def get_ratios(
     for category_name, category_ratios in RATIO_CATEGORIES:
         category_lines: list[str] = []
         for key, label in category_ratios:
-            value = data.get(key)
+            value = getattr(ratios, key, None)
             if value is None:
                 continue
             formatted = _format_ratio_value(key, value)
@@ -192,40 +185,35 @@ async def get_ratio_history(
 
     try:
         cik = await app.resolver.resolve(ticker)
-    except ThesmaAPIError as e:
+    except ThesmaError as e:
         return str(e)
-
-    params: dict[str, Any] = {"period": period}
-    if from_year is not None:
-        params["from"] = from_year
-    if to_year is not None:
-        params["to"] = to_year
 
     try:
-        response = await app.client.get(f"/v1/us/sec/companies/{cik}/ratios/{ratio}", params=params)
-    except ThesmaAPIError as e:
+        result = await app.client.ratios.time_series(cik, ratio, period=period, from_year=from_year, to_year=to_year)
+    except ThesmaError as e:
         return str(e)
 
-    data_points = response.get("data", [])
-    if not data_points:
+    data = result.data
+    series = data.series
+    if not series:
         return f"No data found for ratio '{ratio}'."
 
-    company_name = data_points[0].get("company_name", ticker.upper()) if data_points else ticker.upper()
-    company_ticker = data_points[0].get("ticker", ticker.upper()) if data_points else ticker.upper()
+    company_name = data.company.name if data.company else ticker.upper()
+    company_ticker = data.company.ticker if data.company and data.company.ticker else ticker.upper()
     ratio_label = ratio.replace("_", " ").title()
     period_label = "Annual" if period == "annual" else "Quarterly"
 
     lines = [f"{company_name} ({company_ticker}) — {ratio_label} ({period_label})", ""]
     lines.append(f"{'Year':<8}Value")
 
-    for dp in data_points:
-        year = dp.get("fiscal_year", "")
-        value = dp.get("value")
+    for dp in series:
+        year = dp.fiscal_year
+        value = dp.value
         formatted = _format_ratio_value(ratio, value)
         lines.append(f"{str(year):<8}{formatted}")
 
-    count = len(data_points)
-    years = [dp.get("fiscal_year", 0) for dp in data_points]
+    count = len(series)
+    years = [dp.fiscal_year for dp in series]
     min_year = min(years) if years else ""
     max_year = max(years) if years else ""
 
