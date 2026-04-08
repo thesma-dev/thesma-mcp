@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock
+
 import httpx
 import pytest
 import respx
@@ -51,3 +53,43 @@ async def test_unknown_ticker(resolver: TickerResolver, mock_api: respx.MockRout
     )
     with pytest.raises(ThesmaError, match="No company found for ticker 'ZZZZ'"):
         await resolver.resolve("ZZZZ")
+
+
+async def test_resolve_with_custom_client(resolver: TickerResolver) -> None:
+    """When a custom client is provided, it is used instead of the default client."""
+    mock_response = MagicMock()
+    mock_company = MagicMock()
+    mock_company.cik = "0000320193"
+    mock_response.data = [mock_company]
+
+    custom_client = MagicMock()
+    custom_client.companies.list = AsyncMock(return_value=mock_response)
+
+    result = await resolver.resolve("AAPL", client=custom_client)
+
+    assert result == "0000320193"
+    custom_client.companies.list.assert_awaited_once_with(ticker="AAPL")
+
+
+async def test_resolve_caches_across_clients(resolver: TickerResolver) -> None:
+    """Cache is shared across clients — second call with different client uses cached value."""
+    mock_response = MagicMock()
+    mock_company = MagicMock()
+    mock_company.cik = "0000320193"
+    mock_response.data = [mock_company]
+
+    client_a = MagicMock()
+    client_a.companies.list = AsyncMock(return_value=mock_response)
+
+    client_b = MagicMock()
+    client_b.companies.list = AsyncMock(return_value=mock_response)
+
+    # First call populates cache via client_a
+    result1 = await resolver.resolve("AAPL", client=client_a)
+    assert result1 == "0000320193"
+    client_a.companies.list.assert_awaited_once()
+
+    # Second call should use cache — client_b should NOT be called
+    result2 = await resolver.resolve("AAPL", client=client_b)
+    assert result2 == "0000320193"
+    client_b.companies.list.assert_not_awaited()

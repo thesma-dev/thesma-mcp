@@ -8,7 +8,7 @@ from mcp.server.fastmcp import Context
 from thesma.errors import ThesmaError
 
 from thesma_mcp.formatters import format_percent
-from thesma_mcp.server import AppContext, mcp
+from thesma_mcp.server import AppContext, get_client, mcp
 
 VALID_RATIOS = {
     "gross_margin",
@@ -119,14 +119,15 @@ async def get_ratios(
         return validation_error
 
     app = _get_ctx(ctx)
+    client = get_client(ctx)
 
     try:
-        cik = await app.resolver.resolve(ticker)
+        cik = await app.resolver.resolve(ticker, client=client)
     except ThesmaError as e:
         return str(e)
 
     try:
-        result = await app.client.ratios.get(cik, period=period, year=year, quarter=quarter)  # type: ignore[misc]
+        result = await client.ratios.get(cik, period=period, year=year, quarter=quarter)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
@@ -182,14 +183,15 @@ async def get_ratio_history(
         return f"Invalid ratio '{ratio}'. Valid ratios are: {', '.join(sorted(VALID_RATIOS))}"
 
     app = _get_ctx(ctx)
+    client = get_client(ctx)
 
     try:
-        cik = await app.resolver.resolve(ticker)
+        cik = await app.resolver.resolve(ticker, client=client)
     except ThesmaError as e:
         return str(e)
 
     try:
-        result = await app.client.ratios.time_series(cik, ratio, period=period, from_year=from_year, to_year=to_year)  # type: ignore[misc]
+        result = await client.ratios.time_series(cik, ratio, period=period, from_year=from_year, to_year=to_year)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 

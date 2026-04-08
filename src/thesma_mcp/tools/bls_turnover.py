@@ -10,7 +10,7 @@ from thesma._generated.models import JoltsMeasureValue
 from thesma.errors import ThesmaError
 
 from thesma_mcp.formatters import format_number, format_table
-from thesma_mcp.server import AppContext, mcp
+from thesma_mcp.server import AppContext, get_client, mcp
 
 _DATE_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
@@ -134,7 +134,7 @@ async def get_industry_turnover(
     measures: str | None = None,
 ) -> str:
     """Get JOLTS turnover data for an industry."""
-    app = _get_ctx(ctx)
+    client = get_client(ctx)
 
     err = _validate_dates(from_date, to_date)
     if err:
@@ -148,7 +148,7 @@ async def get_industry_turnover(
 
     try:
         if from_date and to_date:
-            response = await app.client.bls.turnover(  # type: ignore[misc]
+            response = await client.bls.turnover(  # type: ignore[misc]
                 naics, from_date=from_date, to_date=to_date, adjustment=adjustment or "sa", measures=measures
             )
             data_list = response.data
@@ -162,7 +162,7 @@ async def get_industry_turnover(
 
             return _format_time_series(data_list, display_measures, title)
         else:
-            result = await app.client.bls.turnover_latest(naics, adjustment=adjustment or "sa", measures=measures)  # type: ignore[misc]
+            result = await client.bls.turnover_latest(naics, adjustment=adjustment or "sa", measures=measures)  # type: ignore[misc]
             data = result.data
 
             jolts_name = getattr(data, "jolts_industry_name", "")
@@ -189,7 +189,7 @@ async def get_state_turnover(
     adjustment: str | None = None,
 ) -> str:
     """Get JOLTS turnover data for a US state."""
-    app = _get_ctx(ctx)
+    client = get_client(ctx)
 
     err = _validate_dates(from_date, to_date)
     if err:
@@ -197,7 +197,7 @@ async def get_state_turnover(
 
     try:
         if from_date and to_date:
-            response = await app.client.bls.state_turnover(  # type: ignore[misc]
+            response = await client.bls.state_turnover(  # type: ignore[misc]
                 fips, from_date=from_date, to_date=to_date, adjustment=adjustment or "sa"
             )
             data_list = response.data
@@ -206,7 +206,7 @@ async def get_state_turnover(
             title = f"JOLTS Turnover \u2014 State FIPS {fips}"
             return _format_time_series(data_list, _STATE_REGION_MEASURES, title)
         else:
-            response = await app.client.bls.state_turnover(fips, adjustment=adjustment or "sa", per_page=1)  # type: ignore[misc]
+            response = await client.bls.state_turnover(fips, adjustment=adjustment or "sa", per_page=1)  # type: ignore[misc]
             data_list = response.data
             if not data_list:
                 return f"No JOLTS turnover data available for state FIPS {fips}."
@@ -230,7 +230,7 @@ async def get_regional_turnover(
     adjustment: str | None = None,
 ) -> str:
     """Get JOLTS turnover data for a Census region."""
-    app = _get_ctx(ctx)
+    client = get_client(ctx)
 
     err = _validate_dates(from_date, to_date)
     if err:
@@ -238,7 +238,7 @@ async def get_regional_turnover(
 
     try:
         if from_date and to_date:
-            response = await app.client.bls.regional_turnover(  # type: ignore[misc]
+            response = await client.bls.regional_turnover(  # type: ignore[misc]
                 region, from_date=from_date, to_date=to_date, adjustment=adjustment or "sa"
             )
             data_list = response.data
@@ -247,7 +247,7 @@ async def get_regional_turnover(
             title = f"JOLTS Turnover \u2014 {region.title()} Region"
             return _format_time_series(data_list, _STATE_REGION_MEASURES, title)
         else:
-            response = await app.client.bls.regional_turnover(region, adjustment=adjustment or "sa", per_page=1)  # type: ignore[misc]
+            response = await client.bls.regional_turnover(region, adjustment=adjustment or "sa", per_page=1)  # type: ignore[misc]
             data_list = response.data
             if not data_list:
                 return f"No JOLTS turnover data available for {region} region."

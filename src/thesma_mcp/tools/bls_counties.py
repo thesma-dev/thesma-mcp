@@ -8,7 +8,7 @@ from mcp.server.fastmcp import Context
 from thesma.errors import ThesmaError
 
 from thesma_mcp.formatters import format_currency, format_number, format_table
-from thesma_mcp.server import AppContext, mcp
+from thesma_mcp.server import AppContext, get_client, mcp
 
 
 def _get_ctx(ctx: Context[Any, AppContext, Any]) -> AppContext:
@@ -32,12 +32,12 @@ async def get_county_employment(
     quarter: int | None = None,
 ) -> str:
     """Get quarterly employment data for a US county."""
-    app = _get_ctx(ctx)
+    client = get_client(ctx)
 
     fips = fips.zfill(5)
 
     try:
-        response = await app.client.bls.county_employment(  # type: ignore[misc]
+        response = await client.bls.county_employment(  # type: ignore[misc]
             fips,
             industry=industry or "10",
             ownership=ownership or "private",
@@ -92,12 +92,12 @@ async def get_county_wages(
     quarter: int | None = None,
 ) -> str:
     """Get wage snapshot for a US county."""
-    app = _get_ctx(ctx)
+    client = get_client(ctx)
 
     fips = fips.zfill(5)
 
     try:
-        result = await app.client.bls.county_wages(  # type: ignore[misc]
+        result = await client.bls.county_wages(  # type: ignore[misc]
             fips,
             industry=industry or "10",
             ownership=ownership or "private",

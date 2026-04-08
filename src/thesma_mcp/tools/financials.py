@@ -8,7 +8,7 @@ from mcp.server.fastmcp import Context
 from thesma.errors import ThesmaError
 
 from thesma_mcp.formatters import format_currency, format_percent, format_source
-from thesma_mcp.server import AppContext, mcp
+from thesma_mcp.server import AppContext, get_client, mcp
 
 INCOME_FIELDS = [
     ("revenue", "Revenue"),
@@ -112,14 +112,15 @@ async def get_financials(
         return validation_error
 
     app = _get_ctx(ctx)
+    client = get_client(ctx)
 
     try:
-        cik = await app.resolver.resolve(ticker)
+        cik = await app.resolver.resolve(ticker, client=client)
     except ThesmaError as e:
         return str(e)
 
     try:
-        result = await app.client.financials.get(cik, statement=statement, period=period, year=year, quarter=quarter)  # type: ignore[misc]
+        result = await client.financials.get(cik, statement=statement, period=period, year=year, quarter=quarter)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
@@ -211,14 +212,15 @@ async def get_financial_metric(
         return f"Invalid metric '{metric}'. Valid metrics are: {', '.join(sorted(VALID_METRICS))}"
 
     app = _get_ctx(ctx)
+    client = get_client(ctx)
 
     try:
-        cik = await app.resolver.resolve(ticker)
+        cik = await app.resolver.resolve(ticker, client=client)
     except ThesmaError as e:
         return str(e)
 
     try:
-        result = await app.client.financials.time_series(  # type: ignore[misc]
+        result = await client.financials.time_series(  # type: ignore[misc]
             cik, metric, period=period, from_year=from_year, to_year=to_year
         )
     except ThesmaError as e:

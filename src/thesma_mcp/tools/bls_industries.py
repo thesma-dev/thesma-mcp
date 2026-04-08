@@ -9,7 +9,7 @@ from mcp.server.fastmcp import Context
 from thesma.errors import ThesmaError
 
 from thesma_mcp.formatters import format_number, format_table
-from thesma_mcp.server import AppContext, mcp
+from thesma_mcp.server import AppContext, get_client, mcp
 
 
 def _get_ctx(ctx: Context[Any, AppContext, Any]) -> AppContext:
@@ -31,10 +31,10 @@ async def search_industries(
     level: int | None = None,
 ) -> str:
     """Search for BLS industries by name or NAICS level."""
-    app = _get_ctx(ctx)
+    client = get_client(ctx)
 
     try:
-        response = await app.client.bls.industries(search=query, level=level, per_page=25)  # type: ignore[misc]
+        response = await client.bls.industries(search=query, level=level, per_page=25)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
@@ -69,10 +69,10 @@ async def get_industry_detail(
     ctx: Context[Any, AppContext, Any],
 ) -> str:
     """Get details for a single BLS industry."""
-    app = _get_ctx(ctx)
+    client = get_client(ctx)
 
     try:
-        result = await app.client.bls.industry(naics)  # type: ignore[misc]
+        result = await client.bls.industry(naics)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
@@ -132,7 +132,7 @@ async def get_industry_employment(
     metro: str | None = None,
 ) -> str:
     """Get employment data for a BLS industry."""
-    app = _get_ctx(ctx)
+    client = get_client(ctx)
 
     # Validate date formats
     if from_date and not _DATE_RE.match(from_date):
@@ -142,7 +142,7 @@ async def get_industry_employment(
 
     try:
         if from_date and to_date:
-            response = await app.client.bls.employment(  # type: ignore[misc]
+            response = await client.bls.employment(  # type: ignore[misc]
                 naics,
                 from_date=from_date,
                 to_date=to_date,
@@ -153,7 +153,7 @@ async def get_industry_employment(
             )
             return _format_employment_series(response, naics)
         else:
-            result = await app.client.bls.employment_latest(  # type: ignore[misc]
+            result = await client.bls.employment_latest(  # type: ignore[misc]
                 naics,
                 adjustment=adjustment or "sa",
                 geo=geo or "national",

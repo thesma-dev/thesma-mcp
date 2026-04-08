@@ -5,23 +5,24 @@ from __future__ import annotations
 from typing import Any
 
 from mcp.server.fastmcp import Context
+from thesma.client import AsyncThesmaClient
 from thesma.errors import ThesmaError
 
 from thesma_mcp.formatters import format_currency, format_number, format_table
 from thesma_mcp.resolver import CIK_PATTERN
-from thesma_mcp.server import AppContext, mcp
+from thesma_mcp.server import AppContext, get_client, mcp
 
 
 def _get_ctx(ctx: Context[Any, AppContext, Any]) -> AppContext:
     return ctx.request_context.lifespan_context
 
 
-async def _resolve_fund_cik(app: AppContext, fund_name: str) -> str:
+async def _resolve_fund_cik(client: AsyncThesmaClient, fund_name: str) -> str:
     """Resolve a fund name or CIK to a CIK string."""
     if CIK_PATTERN.match(fund_name):
         return fund_name
 
-    response = await app.client.holdings.funds(search=fund_name)  # type: ignore[misc]
+    response = await client.holdings.funds(search=fund_name)  # type: ignore[misc]
     if not response.data:
         msg = f"No fund found matching '{fund_name}'. Try a different name or use the fund's CIK directly."
         raise ThesmaError(msg)
@@ -42,11 +43,11 @@ async def search_funds(
     limit: int = 20,
 ) -> str:
     """Search for institutional funds by name."""
-    app = _get_ctx(ctx)
+    client = get_client(ctx)
     limit = min(limit, 50)
 
     try:
-        response = await app.client.holdings.funds(search=query, per_page=limit)  # type: ignore[misc]
+        response = await client.holdings.funds(search=query, per_page=limit)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
@@ -81,15 +82,16 @@ async def get_institutional_holders(
 ) -> str:
     """Get institutional holders of a company's stock."""
     app = _get_ctx(ctx)
+    client = get_client(ctx)
     limit = min(limit, 50)
 
     try:
-        cik = await app.resolver.resolve(ticker)
+        cik = await app.resolver.resolve(ticker, client=client)
     except ThesmaError as e:
         return str(e)
 
     try:
-        response = await app.client.holdings.holders(cik, quarter=quarter, per_page=limit)  # type: ignore[misc]
+        response = await client.holdings.holders(cik, quarter=quarter, per_page=limit)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
@@ -101,7 +103,7 @@ async def get_institutional_holders(
 
     # Try to get company name from a separate lookup
     try:
-        company_resp = await app.client.companies.get(cik)  # type: ignore[misc]
+        company_resp = await client.companies.get(cik)  # type: ignore[misc]
         comp_data = company_resp.data
         company_name = getattr(comp_data, "name", ticker.upper())
         company_ticker_str = getattr(comp_data, "ticker", ticker.upper())
@@ -154,16 +156,16 @@ async def get_fund_holdings(
     limit: int = 20,
 ) -> str:
     """Get a fund's portfolio holdings."""
-    app = _get_ctx(ctx)
+    client = get_client(ctx)
     limit = min(limit, 50)
 
     try:
-        fund_cik = await _resolve_fund_cik(app, fund_name)
+        fund_cik = await _resolve_fund_cik(client, fund_name)
     except ThesmaError as e:
         return str(e)
 
     try:
-        response = await app.client.holdings.fund_holdings(fund_cik, quarter=quarter, per_page=limit)  # type: ignore[misc]
+        response = await client.holdings.fund_holdings(fund_cik, quarter=quarter, per_page=limit)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
@@ -225,26 +227,27 @@ async def get_holding_changes(
         )
 
     app = _get_ctx(ctx)
+    client = get_client(ctx)
     limit = min(limit, 50)
 
     if ticker:
         try:
-            cik = await app.resolver.resolve(ticker)
+            cik = await app.resolver.resolve(ticker, client=client)
         except ThesmaError as e:
             return str(e)
         try:
-            response = await app.client.holdings.holder_changes(cik, per_page=limit)  # type: ignore[misc]
+            response = await client.holdings.holder_changes(cik, per_page=limit)  # type: ignore[misc]
         except ThesmaError as e:
             return str(e)
         return _format_changes_by_ticker(response, ticker)
     else:
         assert fund_name is not None
         try:
-            fund_cik = await _resolve_fund_cik(app, fund_name)
+            fund_cik = await _resolve_fund_cik(client, fund_name)
         except ThesmaError as e:
             return str(e)
         try:
-            response = await app.client.holdings.fund_changes(fund_cik, per_page=limit)  # type: ignore[misc]
+            response = await client.holdings.fund_changes(fund_cik, per_page=limit)  # type: ignore[misc]
         except ThesmaError as e:
             return str(e)
         return _format_changes_by_fund(response, fund_name)

@@ -8,7 +8,7 @@ from mcp.server.fastmcp import Context
 from thesma.errors import ThesmaError
 
 from thesma_mcp.formatters import format_currency, format_number, format_table
-from thesma_mcp.server import AppContext, mcp
+from thesma_mcp.server import AppContext, get_client, mcp
 
 
 def _get_ctx(ctx: Context[Any, AppContext, Any]) -> AppContext:
@@ -28,12 +28,12 @@ async def search_companies(
     limit: int = 20,
 ) -> str:
     """Search for companies by name, ticker, or sector."""
-    app = _get_ctx(ctx)
+    client = get_client(ctx)
     limit = min(limit, 50)
 
     # Try exact ticker match first
     try:
-        response = await app.client.companies.list(ticker=query.upper())  # type: ignore[misc]
+        response = await client.companies.list(ticker=query.upper())  # type: ignore[misc]
         if response.data:
             return _format_company_list(response.data, query)
     except ThesmaError:
@@ -41,7 +41,7 @@ async def search_companies(
 
     # Fall back to name search
     try:
-        response = await app.client.companies.list(search=query, tier=tier, per_page=limit)  # type: ignore[misc]
+        response = await client.companies.list(search=query, tier=tier, per_page=limit)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
@@ -86,14 +86,15 @@ def _tier_label(tier: str | None) -> str:
 async def get_company(ticker: str, ctx: Context[Any, AppContext, Any]) -> str:
     """Get details for a single company."""
     app = _get_ctx(ctx)
+    client = get_client(ctx)
 
     try:
-        cik = await app.resolver.resolve(ticker)
+        cik = await app.resolver.resolve(ticker, client=client)
     except ThesmaError as e:
         return str(e)
 
     try:
-        result = await app.client.companies.get(cik, include="labor_context")  # type: ignore[misc]
+        result = await client.companies.get(cik, include="labor_context")  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
