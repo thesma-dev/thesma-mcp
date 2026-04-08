@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from thesma.client import AsyncThesmaClient
@@ -122,6 +123,8 @@ def main() -> None:
         mcp.settings.host = "0.0.0.0"  # noqa: S104
         mcp.settings.port = int(port_str)
         mcp.settings.stateless_http = True
+        # Disable DNS rebinding protection — Railway proxies external traffic
+        mcp.settings.transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
 
         if not api_key or not api_key.strip():
             logger.warning("THESMA_API_KEY not set — requests require Authorization header")
