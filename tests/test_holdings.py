@@ -117,7 +117,7 @@ def _make_ctx(
     app.resolver.resolve = AsyncMock(return_value=resolve_cik)
     app.client = MagicMock()
     # Default: fund search returns empty
-    app.client.request = AsyncMock(return_value=_make_paginated_response([]))
+    app.client.holdings.funds = AsyncMock(return_value=_make_paginated_response([]))
     # Default: companies.get for holders title
     app.client.companies.get = AsyncMock(
         return_value=_make_data_response(
@@ -137,7 +137,7 @@ class TestSearchFunds:
         ctx = _make_ctx()
         funds = [_make_fund(), _make_fund("0001234567", "BERKSHIRE CAPITAL HOLDINGS LLC")]
         resp = _make_paginated_response(funds, total=2)
-        ctx.request_context.lifespan_context.client.request = AsyncMock(return_value=resp)
+        ctx.request_context.lifespan_context.client.holdings.funds = AsyncMock(return_value=resp)
 
         result = await search_funds("berkshire", ctx)
         assert "BERKSHIRE HATHAWAY" in result
@@ -148,7 +148,7 @@ class TestSearchFunds:
         """search_funds with no results returns helpful message."""
         ctx = _make_ctx()
         resp = _make_paginated_response([])
-        ctx.request_context.lifespan_context.client.request = AsyncMock(return_value=resp)
+        ctx.request_context.lifespan_context.client.holdings.funds = AsyncMock(return_value=resp)
 
         result = await search_funds("xyznonexistent", ctx)
         assert "No funds found" in result
@@ -184,7 +184,7 @@ class TestGetFundHoldings:
         ctx = _make_ctx()
         # Fund search response
         fund_resp = _make_paginated_response([_make_fund()])
-        ctx.request_context.lifespan_context.client.request = AsyncMock(return_value=fund_resp)
+        ctx.request_context.lifespan_context.client.holdings.funds = AsyncMock(return_value=fund_resp)
         # Holdings response
         holdings = [_make_fund_holding()]
         holdings_resp = _make_paginated_response(holdings, total=42)
@@ -199,7 +199,7 @@ class TestGetFundHoldings:
         """get_fund_holdings with fund name returning no search results returns error."""
         ctx = _make_ctx()
         resp = _make_paginated_response([])
-        ctx.request_context.lifespan_context.client.request = AsyncMock(return_value=resp)
+        ctx.request_context.lifespan_context.client.holdings.funds = AsyncMock(return_value=resp)
 
         result = await get_fund_holdings("NonexistentFund", ctx)
         assert "No fund found" in result
@@ -208,7 +208,7 @@ class TestGetFundHoldings:
         """get_fund_holdings with empty portfolio returns helpful message."""
         ctx = _make_ctx()
         fund_resp = _make_paginated_response([_make_fund()])
-        ctx.request_context.lifespan_context.client.request = AsyncMock(return_value=fund_resp)
+        ctx.request_context.lifespan_context.client.holdings.funds = AsyncMock(return_value=fund_resp)
         ctx.request_context.lifespan_context.client.holdings.fund_holdings = AsyncMock(
             return_value=_make_paginated_response([])
         )
@@ -233,7 +233,7 @@ class TestGetHoldingChanges:
         """get_holding_changes with fund_name uses fund_changes."""
         ctx = _make_ctx()
         fund_resp = _make_paginated_response([_make_fund()])
-        ctx.request_context.lifespan_context.client.request = AsyncMock(return_value=fund_resp)
+        ctx.request_context.lifespan_context.client.holdings.funds = AsyncMock(return_value=fund_resp)
         changes = [_make_fund_position_change()]
         resp = _make_paginated_response(changes, total=10)
         ctx.request_context.lifespan_context.client.holdings.fund_changes = AsyncMock(return_value=resp)

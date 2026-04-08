@@ -102,7 +102,9 @@ async def get_events(
     try:
         if ticker:
             cik = await app.resolver.resolve(ticker)
-            response = await app.client.events.list(cik, from_date=from_date, category=category, per_page=limit)  # type: ignore[misc]
+            response = await app.client.events.list(  # type: ignore[misc]
+                cik, from_date=from_date, to_date=to_date, category=category, per_page=limit
+            )
             # Get company info from the first event if available
             if response.data:
                 company_name = response.data[0].company_name or ticker
@@ -111,7 +113,9 @@ async def get_events(
                 company_name = ticker
                 company_ticker = ticker.upper()
         else:
-            response = await app.client.events.list_all(from_date=from_date, category=category, per_page=limit)  # type: ignore[misc]
+            response = await app.client.events.list_all(  # type: ignore[misc]
+                from_date=from_date, to_date=to_date, category=category, per_page=limit
+            )
     except ThesmaError as e:
         return str(e)
 
