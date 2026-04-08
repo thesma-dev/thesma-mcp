@@ -8,7 +8,7 @@ from mcp.server.fastmcp import Context
 from thesma.errors import ThesmaError
 
 from thesma_mcp.formatters import format_currency, format_table
-from thesma_mcp.server import AppContext, mcp
+from thesma_mcp.server import AppContext, get_client, mcp
 
 
 def _get_ctx(ctx: Context[Any, AppContext, Any]) -> AppContext:
@@ -30,10 +30,10 @@ async def search_occupations(
     group: str | None = None,
 ) -> str:
     """Search for BLS occupations by name."""
-    app = _get_ctx(ctx)
+    client = get_client(ctx)
 
     try:
-        response = await app.client.bls.occupations(search=query, group=group, per_page=25)  # type: ignore[misc]
+        response = await client.bls.occupations(search=query, group=group, per_page=25)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
@@ -74,14 +74,14 @@ async def get_occupation_wages(
     year: int | None = None,
 ) -> str:
     """Get wage data for a BLS occupation."""
-    app = _get_ctx(ctx)
+    client = get_client(ctx)
 
     # Normalize SOC code — insert hyphen if missing
     if "-" not in soc and len(soc) == 6:
         soc = f"{soc[:2]}-{soc[2:]}"
 
     try:
-        response = await app.client.bls.occupation_wages(  # type: ignore[misc]
+        response = await client.bls.occupation_wages(  # type: ignore[misc]
             soc, industry=industry, geo=geo or "national", state=state, metro=metro, year=year
         )
     except ThesmaError as e:

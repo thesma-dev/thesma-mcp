@@ -8,7 +8,7 @@ from mcp.server.fastmcp import Context
 from thesma.errors import ThesmaError
 
 from thesma_mcp.formatters import format_table
-from thesma_mcp.server import AppContext, mcp
+from thesma_mcp.server import AppContext, get_client, mcp
 
 
 def _get_ctx(ctx: Context[Any, AppContext, Any]) -> AppContext:
@@ -30,10 +30,10 @@ async def explore_bls_metrics(
     query: str | None = None,
 ) -> str:
     """Discover available BLS metrics."""
-    app = _get_ctx(ctx)
+    client = get_client(ctx)
 
     try:
-        response = await app.client.bls.metrics(category=category, source=source, search=query)  # type: ignore[misc]
+        response = await client.bls.metrics(category=category, source=source, search=query)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 

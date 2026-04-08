@@ -67,7 +67,9 @@ async def test_trades_with_ticker() -> None:
     result = await get_insider_trades(ctx, ticker="AAPL")
 
     assert "Apple Inc. (AAPL)" in result
-    ctx.request_context.lifespan_context.resolver.resolve.assert_called_once_with("AAPL")
+    resolve_mock = ctx.request_context.lifespan_context.resolver.resolve
+    resolve_mock.assert_called_once()
+    assert resolve_mock.call_args[0][0] == "AAPL"
 
 
 @pytest.mark.asyncio

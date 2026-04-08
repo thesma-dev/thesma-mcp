@@ -9,7 +9,7 @@ from mcp.server.fastmcp import Context
 from thesma.errors import ThesmaError
 
 from thesma_mcp.formatters import format_currency, format_table
-from thesma_mcp.server import AppContext, mcp
+from thesma_mcp.server import AppContext, get_client, mcp
 
 VALID_TYPES = frozenset({"purchase", "sale", "grant", "exercise"})
 
@@ -66,6 +66,7 @@ async def get_insider_trades(
 ) -> str:
     """Get insider trading transactions from Form 4."""
     app: AppContext = ctx.request_context.lifespan_context
+    client = get_client(ctx)
 
     # Treat empty/whitespace ticker as None
     if ticker is not None and not ticker.strip():
@@ -91,8 +92,8 @@ async def get_insider_trades(
     company_ticker: str | None = None
     try:
         if ticker:
-            cik = await app.resolver.resolve(ticker)
-            response = await app.client.insider_trades.list(  # type: ignore[misc]
+            cik = await app.resolver.resolve(ticker, client=client)
+            response = await client.insider_trades.list(  # type: ignore[misc]
                 cik, from_date=from_date, to_date=to_date, trade_type=type, per_page=limit
             )
             # Get company info from the first trade if available
@@ -103,7 +104,7 @@ async def get_insider_trades(
                 company_name = ticker
                 company_ticker = ticker.upper()
         else:
-            response = await app.client.insider_trades.list_all(from_date=from_date, to_date=to_date, per_page=limit)  # type: ignore[misc]
+            response = await client.insider_trades.list_all(from_date=from_date, to_date=to_date, per_page=limit)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 

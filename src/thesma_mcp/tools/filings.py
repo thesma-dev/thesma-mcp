@@ -8,7 +8,7 @@ from mcp.server.fastmcp import Context
 from thesma.errors import ThesmaError
 
 from thesma_mcp.formatters import format_table
-from thesma_mcp.server import AppContext, mcp
+from thesma_mcp.server import AppContext, get_client, mcp
 
 
 def _get_ctx(ctx: Context[Any, AppContext, Any]) -> AppContext:
@@ -31,18 +31,19 @@ async def search_filings(
 ) -> str:
     """Search SEC filings by company, type, and date range."""
     app = _get_ctx(ctx)
+    client = get_client(ctx)
     limit = min(limit, 50)
 
     cik: str | None = None
 
     if ticker:
         try:
-            cik = await app.resolver.resolve(ticker)
+            cik = await app.resolver.resolve(ticker, client=client)
         except ThesmaError as e:
             return str(e)
 
     try:
-        response = await app.client.filings.list_all(  # type: ignore[misc]
+        response = await client.filings.list_all(  # type: ignore[misc]
             cik=cik,
             filing_type=type,
             start_date=from_date,
@@ -64,7 +65,7 @@ async def search_filings(
         # Attempt to resolve company name from a separate lookup
         if cik:
             try:
-                company_resp = await app.client.companies.get(cik)  # type: ignore[misc]
+                company_resp = await client.companies.get(cik)  # type: ignore[misc]
                 comp_data = company_resp.data
                 comp_name = getattr(comp_data, "name", ticker.upper())
                 comp_ticker = getattr(comp_data, "ticker", ticker.upper())

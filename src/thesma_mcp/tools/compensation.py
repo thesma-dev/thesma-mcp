@@ -8,7 +8,7 @@ from mcp.server.fastmcp import Context
 from thesma.errors import ThesmaError
 
 from thesma_mcp.formatters import format_currency, format_table
-from thesma_mcp.server import AppContext, mcp
+from thesma_mcp.server import AppContext, get_client, mcp
 
 
 def _get_ctx(ctx: Context[Any, AppContext, Any]) -> AppContext:
@@ -28,14 +28,15 @@ async def get_executive_compensation(
 ) -> str:
     """Get named executive officer compensation."""
     app = _get_ctx(ctx)
+    client = get_client(ctx)
 
     try:
-        cik = await app.resolver.resolve(ticker)
+        cik = await app.resolver.resolve(ticker, client=client)
     except ThesmaError as e:
         return str(e)
 
     try:
-        result = await app.client.compensation.get(cik, year=year)  # type: ignore[misc]
+        result = await client.compensation.get(cik, year=year)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
@@ -131,14 +132,15 @@ async def get_board_members(
 ) -> str:
     """Get board of directors from proxy statements."""
     app = _get_ctx(ctx)
+    client = get_client(ctx)
 
     try:
-        cik = await app.resolver.resolve(ticker)
+        cik = await app.resolver.resolve(ticker, client=client)
     except ThesmaError as e:
         return str(e)
 
     try:
-        result = await app.client.compensation.board(cik)  # type: ignore[misc]
+        result = await client.compensation.board(cik)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 

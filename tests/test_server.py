@@ -144,6 +144,16 @@ class TestGetClient:
         assert isinstance(client, AsyncThesmaClient)
         assert client is not default  # Should be a new client
 
+    def test_per_request_client_has_correct_key(self) -> None:
+        """Per-request client uses the API key from the Authorization header."""
+        default = AsyncMock(spec=AsyncThesmaClient)
+        ctx = _make_ctx(auth_header="Bearer test-key", default_client=default)
+
+        client = get_client(ctx)
+
+        assert isinstance(client, AsyncThesmaClient)
+        assert client is not default
+
     def test_no_auth_uses_default(self) -> None:
         """No auth header returns the shared default client."""
         default = AsyncMock(spec=AsyncThesmaClient)

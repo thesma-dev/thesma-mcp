@@ -8,7 +8,7 @@ from mcp.server.fastmcp import Context
 from thesma.errors import ThesmaError
 
 from thesma_mcp.formatters import format_percent, format_table
-from thesma_mcp.server import AppContext, mcp
+from thesma_mcp.server import get_client, mcp
 
 _JOLTS_FILTER_KEYS = {
     "min_industry_quits_rate",
@@ -253,7 +253,7 @@ async def screen_companies(
     min_comp_to_market_ratio: float | None = None,
 ) -> str:
     """Screen companies by financial criteria."""
-    app: AppContext = ctx.request_context.lifespan_context
+    client = get_client(ctx)
 
     # Validate sort field
     if sort and sort not in VALID_SORT_FIELDS:
@@ -301,7 +301,7 @@ async def screen_companies(
     api_has_institutional = has_institutional_increase if has_institutional_increase else None
 
     try:
-        response = await app.client.screener.screen(  # type: ignore[misc]
+        response = await client.screener.screen(  # type: ignore[misc]
             min_revenue=min_revenue,
             min_net_income=min_net_income,
             min_gross_margin=min_gross_margin,

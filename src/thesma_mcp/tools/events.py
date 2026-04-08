@@ -9,7 +9,7 @@ from mcp.server.fastmcp import Context
 from thesma.errors import ThesmaError
 
 from thesma_mcp.formatters import format_table
-from thesma_mcp.server import AppContext, mcp
+from thesma_mcp.server import AppContext, get_client, mcp
 
 CATEGORY_LABELS: dict[str, str] = {
     "ma": "M&A",
@@ -76,6 +76,7 @@ async def get_events(
 ) -> str:
     """Get 8-K corporate events."""
     app: AppContext = ctx.request_context.lifespan_context
+    client = get_client(ctx)
 
     # Treat empty/whitespace ticker as None
     if ticker is not None and not ticker.strip():
@@ -101,8 +102,8 @@ async def get_events(
     company_ticker: str | None = None
     try:
         if ticker:
-            cik = await app.resolver.resolve(ticker)
-            response = await app.client.events.list(  # type: ignore[misc]
+            cik = await app.resolver.resolve(ticker, client=client)
+            response = await client.events.list(  # type: ignore[misc]
                 cik, from_date=from_date, to_date=to_date, category=category, per_page=limit
             )
             # Get company info from the first event if available
@@ -113,7 +114,7 @@ async def get_events(
                 company_name = ticker
                 company_ticker = ticker.upper()
         else:
-            response = await app.client.events.list_all(  # type: ignore[misc]
+            response = await client.events.list_all(  # type: ignore[misc]
                 from_date=from_date, to_date=to_date, category=category, per_page=limit
             )
     except ThesmaError as e:

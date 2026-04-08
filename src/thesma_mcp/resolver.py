@@ -20,11 +20,16 @@ class TickerResolver:
         self._client: AsyncThesmaClient = client
         self._cache: dict[str, str] = {}
 
-    async def resolve(self, ticker_or_cik: str) -> str:
+    async def resolve(self, ticker_or_cik: str, client: AsyncThesmaClient | None = None) -> str:
         """Resolve a ticker or CIK to a 10-digit zero-padded CIK string.
 
         If the input is already a CIK (10-digit zero-padded starting with "0"),
         return it as-is. Otherwise, look up the ticker via the Thesma API.
+
+        When *client* is provided it is used for the API call instead of the
+        default client passed at construction time.  The cache is shared across
+        all callers regardless of which client was used (CIK mappings are not
+        auth-sensitive).
         """
         if CIK_PATTERN.match(ticker_or_cik):
             return ticker_or_cik
@@ -33,8 +38,9 @@ class TickerResolver:
         if cache_key in self._cache:
             return self._cache[cache_key]
 
+        api_client = client or self._client
         try:
-            response = await self._client.companies.list(ticker=cache_key)  # type: ignore[misc]
+            response = await api_client.companies.list(ticker=cache_key)  # type: ignore[misc]
         except ThesmaError as e:
             msg = f"No company found for ticker '{ticker_or_cik}'. Try searching with search_companies."
             raise ThesmaError(msg) from e
