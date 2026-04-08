@@ -42,7 +42,7 @@ async def search_filings(
             return str(e)
 
     try:
-        response = await app.client.filings.list_all(
+        response = await app.client.filings.list_all(  # type: ignore[misc]
             cik=cik,
             filing_type=type,
             start_date=from_date,
@@ -64,7 +64,7 @@ async def search_filings(
         # Attempt to resolve company name from a separate lookup
         if cik:
             try:
-                company_resp = await app.client.companies.get(cik)
+                company_resp = await app.client.companies.get(cik)  # type: ignore[misc]
                 comp_data = company_resp.data
                 comp_name = getattr(comp_data, "name", ticker.upper())
                 comp_ticker = getattr(comp_data, "ticker", ticker.upper())

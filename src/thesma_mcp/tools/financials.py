@@ -119,7 +119,7 @@ async def get_financials(
         return str(e)
 
     try:
-        result = await app.client.financials.get(cik, statement=statement, period=period, year=year, quarter=quarter)
+        result = await app.client.financials.get(cik, statement=statement, period=period, year=year, quarter=quarter)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
@@ -218,7 +218,7 @@ async def get_financial_metric(
         return str(e)
 
     try:
-        result = await app.client.financials.time_series(
+        result = await app.client.financials.time_series(  # type: ignore[misc]
             cik, metric, period=period, from_year=from_year, to_year=to_year
         )
     except ThesmaError as e:

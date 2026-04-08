@@ -33,7 +33,7 @@ async def search_occupations(
     app = _get_ctx(ctx)
 
     try:
-        response = await app.client.bls.occupations(search=query, group=group, per_page=25)
+        response = await app.client.bls.occupations(search=query, group=group, per_page=25)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
@@ -81,7 +81,7 @@ async def get_occupation_wages(
         soc = f"{soc[:2]}-{soc[2:]}"
 
     try:
-        response = await app.client.bls.occupation_wages(
+        response = await app.client.bls.occupation_wages(  # type: ignore[misc]
             soc, industry=industry, geo=geo or "national", state=state, metro=metro, year=year
         )
     except ThesmaError as e:

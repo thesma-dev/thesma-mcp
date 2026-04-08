@@ -126,7 +126,7 @@ async def get_ratios(
         return str(e)
 
     try:
-        result = await app.client.ratios.get(cik, period=period, year=year, quarter=quarter)
+        result = await app.client.ratios.get(cik, period=period, year=year, quarter=quarter)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
@@ -189,7 +189,7 @@ async def get_ratio_history(
         return str(e)
 
     try:
-        result = await app.client.ratios.time_series(cik, ratio, period=period, from_year=from_year, to_year=to_year)
+        result = await app.client.ratios.time_series(cik, ratio, period=period, from_year=from_year, to_year=to_year)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 

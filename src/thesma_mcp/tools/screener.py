@@ -301,7 +301,7 @@ async def screen_companies(
     api_has_institutional = has_institutional_increase if has_institutional_increase else None
 
     try:
-        response = await app.client.screener.screen(
+        response = await app.client.screener.screen(  # type: ignore[misc]
             min_revenue=min_revenue,
             min_net_income=min_net_income,
             min_gross_margin=min_gross_margin,

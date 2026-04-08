@@ -35,7 +35,7 @@ async def get_executive_compensation(
         return str(e)
 
     try:
-        result = await app.client.compensation.get(cik, year=year)
+        result = await app.client.compensation.get(cik, year=year)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
@@ -138,7 +138,7 @@ async def get_board_members(
         return str(e)
 
     try:
-        result = await app.client.compensation.board(cik)
+        result = await app.client.compensation.board(cik)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 

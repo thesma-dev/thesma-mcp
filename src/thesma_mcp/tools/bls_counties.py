@@ -37,7 +37,7 @@ async def get_county_employment(
     fips = fips.zfill(5)
 
     try:
-        response = await app.client.bls.county_employment(
+        response = await app.client.bls.county_employment(  # type: ignore[misc]
             fips,
             industry=industry or "10",
             ownership=ownership or "private",
@@ -97,7 +97,7 @@ async def get_county_wages(
     fips = fips.zfill(5)
 
     try:
-        result = await app.client.bls.county_wages(
+        result = await app.client.bls.county_wages(  # type: ignore[misc]
             fips,
             industry=industry or "10",
             ownership=ownership or "private",

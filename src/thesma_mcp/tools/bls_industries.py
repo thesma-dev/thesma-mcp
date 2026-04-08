@@ -34,7 +34,7 @@ async def search_industries(
     app = _get_ctx(ctx)
 
     try:
-        response = await app.client.bls.industries(search=query, level=level, per_page=25)
+        response = await app.client.bls.industries(search=query, level=level, per_page=25)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
@@ -72,7 +72,7 @@ async def get_industry_detail(
     app = _get_ctx(ctx)
 
     try:
-        result = await app.client.bls.industry(naics)
+        result = await app.client.bls.industry(naics)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
@@ -142,7 +142,7 @@ async def get_industry_employment(
 
     try:
         if from_date and to_date:
-            response = await app.client.bls.employment(
+            response = await app.client.bls.employment(  # type: ignore[misc]
                 naics,
                 from_date=from_date,
                 to_date=to_date,
@@ -153,7 +153,7 @@ async def get_industry_employment(
             )
             return _format_employment_series(response, naics)
         else:
-            result = await app.client.bls.employment_latest(
+            result = await app.client.bls.employment_latest(  # type: ignore[misc]
                 naics,
                 adjustment=adjustment or "sa",
                 geo=geo or "national",

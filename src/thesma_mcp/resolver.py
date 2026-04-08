@@ -34,7 +34,7 @@ class TickerResolver:
             return self._cache[cache_key]
 
         try:
-            response = await self._client.companies.list(ticker=cache_key)
+            response = await self._client.companies.list(ticker=cache_key)  # type: ignore[misc]
         except ThesmaError as e:
             msg = f"No company found for ticker '{ticker_or_cik}'. Try searching with search_companies."
             raise ThesmaError(msg) from e

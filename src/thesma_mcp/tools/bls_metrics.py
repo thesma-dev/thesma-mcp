@@ -33,7 +33,7 @@ async def explore_bls_metrics(
     app = _get_ctx(ctx)
 
     try:
-        response = await app.client.bls.metrics(category=category, source=source, search=query)
+        response = await app.client.bls.metrics(category=category, source=source, search=query)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 

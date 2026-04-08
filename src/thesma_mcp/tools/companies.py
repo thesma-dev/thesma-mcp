@@ -33,7 +33,7 @@ async def search_companies(
 
     # Try exact ticker match first
     try:
-        response = await app.client.companies.list(ticker=query.upper())
+        response = await app.client.companies.list(ticker=query.upper())  # type: ignore[misc]
         if response.data:
             return _format_company_list(response.data, query)
     except ThesmaError:
@@ -41,7 +41,7 @@ async def search_companies(
 
     # Fall back to name search
     try:
-        response = await app.client.companies.list(search=query, tier=tier, per_page=limit)
+        response = await app.client.companies.list(search=query, tier=tier, per_page=limit)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
@@ -93,7 +93,7 @@ async def get_company(ticker: str, ctx: Context[Any, AppContext, Any]) -> str:
         return str(e)
 
     try:
-        result = await app.client.companies.get(cik, include="labor_context")
+        result = await app.client.companies.get(cik, include="labor_context")  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
@@ -125,7 +125,7 @@ async def get_company(ticker: str, ctx: Context[Any, AppContext, Any]) -> str:
     labor_ctx = getattr(data, "labor_context", None)
     # Also check model_extra for labor_context if not a direct attribute
     if labor_ctx is None and hasattr(data, "model_extra"):
-        labor_ctx = data.model_extra.get("labor_context")  # type: ignore[union-attr]
+        labor_ctx = data.model_extra.get("labor_context")
     if labor_ctx:
         lines.append("")
         # labor_ctx might be a LaborContext model or a dict (from extra="allow")
