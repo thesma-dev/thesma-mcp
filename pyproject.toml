@@ -28,8 +28,8 @@ dependencies = [
 [project.urls]
 Homepage = "https://thesma.dev"
 Documentation = "https://docs.thesma.dev"
-Repository = "https://github.com/thenerdcastle/thesma-mcp"
-Issues = "https://github.com/thenerdcastle/thesma-mcp/issues"
+Repository = "https://github.com/thesma-dev/thesma-mcp"
+Issues = "https://github.com/thesma-dev/thesma-mcp/issues"
 
 [project.optional-dependencies]
 dev = [
