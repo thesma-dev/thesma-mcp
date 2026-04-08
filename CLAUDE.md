@@ -48,7 +48,15 @@ cp .env.example .env  # then fill in THESMA_API_KEY
 
 ## Port
 
-- HTTP transport (future): **8200**
+- HTTP transport: **8200** (default, overridden by `PORT` env var on Railway)
+
+## Deployment
+
+The MCP server is deployed on Railway via Streamable HTTP.
+
+- **Dockerfile**: Does NOT set `THESMA_MCP_TRANSPORT` — must be passed at runtime
+- **Railway env vars**: `THESMA_MCP_TRANSPORT=http`, `THESMA_API_KEY` (optional — enables free-tier fallback), `PORT` (set by Railway)
+- **Health check**: `GET /health` on the Railway domain
 
 ## Conventions
 
