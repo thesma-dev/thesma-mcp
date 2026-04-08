@@ -92,7 +92,9 @@ async def get_insider_trades(
     try:
         if ticker:
             cik = await app.resolver.resolve(ticker)
-            response = await app.client.insider_trades.list(cik, from_date=from_date, trade_type=type, per_page=limit)  # type: ignore[misc]
+            response = await app.client.insider_trades.list(  # type: ignore[misc]
+                cik, from_date=from_date, to_date=to_date, trade_type=type, per_page=limit
+            )
             # Get company info from the first trade if available
             if response.data:
                 company_name = response.data[0].company_name or ticker
@@ -101,7 +103,7 @@ async def get_insider_trades(
                 company_name = ticker
                 company_ticker = ticker.upper()
         else:
-            response = await app.client.insider_trades.list_all(from_date=from_date, per_page=limit)  # type: ignore[misc]
+            response = await app.client.insider_trades.list_all(from_date=from_date, to_date=to_date, per_page=limit)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 

@@ -5,8 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from mcp.server.fastmcp import Context
-from thesma._generated.models import FundListItem
-from thesma._types import PaginatedResponse
 from thesma.errors import ThesmaError
 
 from thesma_mcp.formatters import format_currency, format_number, format_table
@@ -23,13 +21,8 @@ async def _resolve_fund_cik(app: AppContext, fund_name: str) -> str:
     if CIK_PATTERN.match(fund_name):
         return fund_name
 
-    response = await app.client.request(
-        "GET",
-        "/v1/us/sec/funds",
-        params={"search": fund_name},
-        response_model=PaginatedResponse[FundListItem],
-    )
-    if response is None or not response.data:
+    response = await app.client.holdings.funds(search=fund_name)  # type: ignore[misc]
+    if not response.data:
         msg = f"No fund found matching '{fund_name}'. Try a different name or use the fund's CIK directly."
         raise ThesmaError(msg)
 
@@ -53,17 +46,9 @@ async def search_funds(
     limit = min(limit, 50)
 
     try:
-        response = await app.client.request(
-            "GET",
-            "/v1/us/sec/funds",
-            params={"search": query, "per_page": limit},
-            response_model=PaginatedResponse[FundListItem],
-        )
+        response = await app.client.holdings.funds(search=query, per_page=limit)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
-
-    if response is None:
-        return f'No funds found matching "{query}". Try a different name.'
 
     funds = response.data
 
