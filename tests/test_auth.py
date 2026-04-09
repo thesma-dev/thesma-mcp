@@ -256,44 +256,95 @@ class TestSupabaseAuth:
             with pytest.raises(SupabaseDownError, match="temporarily unavailable"):
                 await auth.authenticate("test@example.com", "password123")
 
-    async def test_get_api_key_returns_oldest(self) -> None:
+    async def test_create_mcp_oauth_key_deactivates_existing_and_creates_new(self) -> None:
         auth = SupabaseAuth(SUPABASE_URL, SUPABASE_KEY)
 
         with respx.mock:
-            respx.get(f"{SUPABASE_URL}/rest/v1/api_keys").mock(
-                return_value=httpx.Response(
-                    200,
-                    json=[
-                        {"key_plaintext": "gd_live_oldest_key_here", "created_at": "2024-01-01"},
-                        {"key_plaintext": "gd_live_newer_key_here0", "created_at": "2024-06-01"},
-                    ],
-                )
-            )
+            patch_route = respx.patch(f"{SUPABASE_URL}/rest/v1/api_keys").mock(return_value=httpx.Response(204))
+            post_route = respx.post(f"{SUPABASE_URL}/rest/v1/api_keys").mock(return_value=httpx.Response(201, json={}))
 
-            key = await auth.get_or_create_api_key("uuid-123")
-
-        assert key == "gd_live_oldest_key_here"
-
-    async def test_get_api_key_none_creates_new(self) -> None:
-        auth = SupabaseAuth(SUPABASE_URL, SUPABASE_KEY)
-
-        with respx.mock:
-            respx.get(f"{SUPABASE_URL}/rest/v1/api_keys").mock(return_value=httpx.Response(200, json=[]))
-            create_route = respx.post(f"{SUPABASE_URL}/rest/v1/api_keys").mock(
-                return_value=httpx.Response(201, json={})
-            )
-
-            key = await auth.get_or_create_api_key("uuid-123")
+            key = await auth.create_mcp_oauth_key("uuid-123")
 
         assert key.startswith("gd_live_")
-        assert len(key) == 40  # "gd_live_" (8) + 32 hex chars
+        assert len(key) == 40
 
-        # Verify the POST body
-        request_body = create_route.calls[0].request
-        body = json.loads(request_body.content)
-        assert body["key_hash"] == hashlib.sha256(key.encode()).hexdigest()
-        assert body["key_prefix"] == key[:12]
-        assert body["user_id"] == "uuid-123"
+        # PATCH was called
+        assert patch_route.called
+        patch_request = patch_route.calls[0].request
+        # All three filter params present
+        assert "user_id=eq.uuid-123" in str(patch_request.url)
+        assert "source=eq.mcp_oauth" in str(patch_request.url)
+        assert "is_active=eq.true" in str(patch_request.url)
+        # PATCH body
+        patch_body = json.loads(patch_request.content)
+        assert patch_body["is_active"] is False
+        assert patch_body["revoked_at"] is not None
+
+        # POST was called
+        assert post_route.called
+        post_body = json.loads(post_route.calls[0].request.content)
+        assert post_body["user_id"] == "uuid-123"
+        assert post_body["key_hash"] == hashlib.sha256(key.encode()).hexdigest()
+        assert post_body["key_prefix"] == key[:12]
+        assert post_body["name"] == "MCP OAuth"
+        assert post_body["source"] == "mcp_oauth"
+        assert post_body["is_active"] is True
+        # Regression: key_plaintext must NOT be in the body
+        assert "key_plaintext" not in post_body
+
+    async def test_create_mcp_oauth_key_no_existing_keys(self) -> None:
+        """PATCH matching 0 rows returns 204 — still valid, POST proceeds."""
+        auth = SupabaseAuth(SUPABASE_URL, SUPABASE_KEY)
+
+        with respx.mock:
+            patch_route = respx.patch(f"{SUPABASE_URL}/rest/v1/api_keys").mock(return_value=httpx.Response(204))
+            post_route = respx.post(f"{SUPABASE_URL}/rest/v1/api_keys").mock(return_value=httpx.Response(201, json={}))
+
+            key = await auth.create_mcp_oauth_key("uuid-456")
+
+        assert key.startswith("gd_live_")
+        assert patch_route.call_count == 1
+        assert post_route.call_count == 1
+
+    async def test_create_mcp_oauth_key_patch_failure_raises(self) -> None:
+        auth = SupabaseAuth(SUPABASE_URL, SUPABASE_KEY)
+
+        with respx.mock:
+            respx.patch(f"{SUPABASE_URL}/rest/v1/api_keys").mock(return_value=httpx.Response(500))
+            post_route = respx.post(f"{SUPABASE_URL}/rest/v1/api_keys").mock(return_value=httpx.Response(201, json={}))
+
+            with pytest.raises(SupabaseDownError):
+                await auth.create_mcp_oauth_key("uuid-123")
+
+        # POST must NOT have been called
+        assert not post_route.called
+
+    async def test_create_mcp_oauth_key_post_failure_raises(self) -> None:
+        auth = SupabaseAuth(SUPABASE_URL, SUPABASE_KEY)
+
+        with respx.mock:
+            respx.patch(f"{SUPABASE_URL}/rest/v1/api_keys").mock(return_value=httpx.Response(204))
+            respx.post(f"{SUPABASE_URL}/rest/v1/api_keys").mock(return_value=httpx.Response(500))
+
+            with pytest.raises(SupabaseDownError):
+                await auth.create_mcp_oauth_key("uuid-123")
+
+    async def test_create_mcp_oauth_key_timeout_raises(self) -> None:
+        auth = SupabaseAuth(SUPABASE_URL, SUPABASE_KEY)
+
+        with respx.mock:
+            respx.patch(f"{SUPABASE_URL}/rest/v1/api_keys").mock(side_effect=httpx.TimeoutException("timeout"))
+
+            with pytest.raises(SupabaseDownError, match="temporarily unavailable"):
+                await auth.create_mcp_oauth_key("uuid-123")
+
+    async def test_auth_py_does_not_reference_key_plaintext(self) -> None:
+        """Regression: the string `key_plaintext` must not appear in auth.py."""
+        import pathlib
+
+        auth_py = pathlib.Path(__file__).parent.parent / "src" / "thesma_mcp" / "auth.py"
+        content = auth_py.read_text()
+        assert "key_plaintext" not in content
 
 
 # ---------------------------------------------------------------------------
@@ -503,7 +554,7 @@ class TestIntegration:
         with (
             patch.object(provider.supabase_auth, "authenticate", new_callable=AsyncMock, return_value="uuid-123"),
             patch.object(
-                provider.supabase_auth, "get_or_create_api_key", new_callable=AsyncMock, return_value="gd_live_testkey"
+                provider.supabase_auth, "create_mcp_oauth_key", new_callable=AsyncMock, return_value="gd_live_testkey"
             ),
         ):
             response = client.post(
@@ -630,7 +681,7 @@ class TestIntegration:
             patch.object(provider.supabase_auth, "authenticate", new_callable=AsyncMock, return_value="uuid-123"),
             patch.object(
                 provider.supabase_auth,
-                "get_or_create_api_key",
+                "create_mcp_oauth_key",
                 new_callable=AsyncMock,
                 return_value="gd_live_full_flow_key",
             ),
@@ -707,7 +758,7 @@ class TestIntegration:
         with (
             patch.object(provider.supabase_auth, "authenticate", new_callable=AsyncMock, return_value="uuid-123"),
             patch.object(
-                provider.supabase_auth, "get_or_create_api_key", new_callable=AsyncMock, return_value="gd_live_key"
+                provider.supabase_auth, "create_mcp_oauth_key", new_callable=AsyncMock, return_value="gd_live_key"
             ),
         ):
             login_resp = client.post(
@@ -782,7 +833,7 @@ class TestIntegration:
         with (
             patch.object(provider.supabase_auth, "authenticate", new_callable=AsyncMock, return_value="uuid-123"),
             patch.object(
-                provider.supabase_auth, "get_or_create_api_key", new_callable=AsyncMock, return_value="gd_live_key"
+                provider.supabase_auth, "create_mcp_oauth_key", new_callable=AsyncMock, return_value="gd_live_key"
             ),
         ):
             login_resp = client.post(

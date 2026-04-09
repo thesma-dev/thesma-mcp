@@ -164,7 +164,7 @@ def _register_login_routes(
         # Authenticate with Supabase
         try:
             user_id = await provider.supabase_auth.authenticate(email, password)
-            api_key = await provider.supabase_auth.get_or_create_api_key(user_id)
+            api_key = await provider.supabase_auth.create_mcp_oauth_key(user_id)
         except SupabaseAuthError:
             error_html = '<div class="error">Invalid email or password.</div>'
             html = LOGIN_HTML.replace("{session}", session).replace("{error_html}", error_html)

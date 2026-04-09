@@ -109,51 +109,66 @@ class SupabaseAuth:
             user_id: str = user["id"]
             return user_id
 
-    async def get_or_create_api_key(self, user_id: str) -> str:
-        """Get the user's oldest active API key, or create one if none exist."""
+    async def create_mcp_oauth_key(self, user_id: str) -> str:
+        """Create a new MCP OAuth API key, deactivating any previous ones for this user.
+
+        Plaintext is only available at creation time (only hash + prefix are stored),
+        so we always create a new key rather than trying to retrieve an existing one.
+        """
+        plaintext = f"gd_live_{secrets.token_hex(16)}"
+        key_hash = hashlib.sha256(plaintext.encode()).hexdigest()
+        key_prefix = plaintext[:12]
+
         async with httpx.AsyncClient(timeout=10.0) as client:
-            # Look up existing keys
-            resp = await client.get(
-                f"{self._url}/rest/v1/api_keys",
-                params={
-                    "user_id": f"eq.{user_id}",
-                    "is_active": "eq.true",
-                    "order": "created_at.asc",
-                    "limit": "1",
-                },
-                headers={
-                    "apikey": self._key,
-                    "Authorization": f"Bearer {self._key}",
-                },
-            )
+            # Step 1: Deactivate any existing active mcp_oauth keys for this user
+            try:
+                patch_resp = await client.patch(
+                    f"{self._url}/rest/v1/api_keys",
+                    params={
+                        "user_id": f"eq.{user_id}",
+                        "source": "eq.mcp_oauth",
+                        "is_active": "eq.true",
+                    },
+                    headers={
+                        "apikey": self._key,
+                        "Authorization": f"Bearer {self._key}",
+                        "Content-Type": "application/json",
+                        "Prefer": "return=minimal",
+                    },
+                    json={"is_active": False, "revoked_at": "now()"},
+                )
+            except httpx.TimeoutException as exc:
+                raise SupabaseDownError("Authentication service temporarily unavailable. Please try again.") from exc
 
-            keys: list[dict[str, Any]] = resp.json()
-            if keys:
-                return str(keys[0]["key_plaintext"])
+            if patch_resp.status_code not in (200, 204):
+                raise SupabaseDownError("Authentication service temporarily unavailable. Please try again.")
 
-            # No active key — create one
-            plaintext = f"gd_live_{secrets.token_hex(16)}"
-            key_hash = hashlib.sha256(plaintext.encode()).hexdigest()
-            key_prefix = plaintext[:12]
+            # Step 2: Create the new key
+            try:
+                post_resp = await client.post(
+                    f"{self._url}/rest/v1/api_keys",
+                    headers={
+                        "apikey": self._key,
+                        "Authorization": f"Bearer {self._key}",
+                        "Content-Type": "application/json",
+                        "Prefer": "return=minimal",
+                    },
+                    json={
+                        "user_id": user_id,
+                        "key_hash": key_hash,
+                        "key_prefix": key_prefix,
+                        "name": "MCP OAuth",
+                        "source": "mcp_oauth",
+                        "is_active": True,
+                    },
+                )
+            except httpx.TimeoutException as exc:
+                raise SupabaseDownError("Authentication service temporarily unavailable. Please try again.") from exc
 
-            resp = await client.post(
-                f"{self._url}/rest/v1/api_keys",
-                headers={
-                    "apikey": self._key,
-                    "Authorization": f"Bearer {self._key}",
-                    "Content-Type": "application/json",
-                    "Prefer": "return=minimal",
-                },
-                json={
-                    "user_id": user_id,
-                    "key_hash": key_hash,
-                    "key_prefix": key_prefix,
-                    "key_plaintext": plaintext,
-                    "is_active": True,
-                },
-            )
+            if post_resp.status_code not in (200, 201):
+                raise SupabaseDownError("Authentication service temporarily unavailable. Please try again.")
 
-            return plaintext
+        return plaintext
 
 
 # ---------------------------------------------------------------------------
