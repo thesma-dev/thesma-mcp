@@ -432,7 +432,6 @@ SUCCESS_HTML = """<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Thesma - Signed In</title>
-  <script>window.location.href = "{redirect_url}";</script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -495,5 +494,11 @@ SUCCESS_HTML = """<!DOCTYPE html>
       If you're not redirected, <a href="{redirect_url}">click here to continue</a>.
     </div>
   </div>
+  <script>
+    // Delay briefly so the success card is visible before navigating away.
+    setTimeout(function() {
+      window.location.href = "{redirect_url}";
+    }, 800);
+  </script>
 </body>
 </html>"""
