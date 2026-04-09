@@ -286,38 +286,15 @@ class TestSupabaseAuth:
             with pytest.raises(Exception):
                 await supabase.authenticate("user@test.com", "password123")
 
-    async def test_get_api_key_returns_oldest(self, supabase: Any) -> None:
-        """When user has multiple keys, the oldest (first) is returned."""
-        mock_response = httpx.Response(
-            200,
-            json=[
-                {"key_plaintext": "gd_live_oldest_key_here", "created_at": "2024-01-01T00:00:00Z"},
-                {"key_plaintext": "gd_live_newer_key_here0", "created_at": "2024-06-01T00:00:00Z"},
-            ],
-            request=httpx.Request("GET", "https://test-project.supabase.co/rest/v1/api_keys"),
-        )
-
-        with patch("thesma_mcp.auth.httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.get = AsyncMock(return_value=mock_response)
-            mock_client_cls.return_value = mock_client
-
-            result = await supabase.get_or_create_api_key("uuid-123")
-
-        assert result == "gd_live_oldest_key_here"
-
-    async def test_get_api_key_none_creates_new(self, supabase: Any) -> None:
-        """When no keys exist, a new one is created with gd_live_ prefix."""
-        empty_response = httpx.Response(
-            200,
-            json=[],
-            request=httpx.Request("GET", "https://test-project.supabase.co/rest/v1/api_keys"),
+    async def test_create_mcp_oauth_key_always_creates_new(self, supabase: Any) -> None:
+        """create_mcp_oauth_key always creates a fresh key (PATCH + POST)."""
+        patch_response = httpx.Response(
+            204,
+            request=httpx.Request("PATCH", "https://test-project.supabase.co/rest/v1/api_keys"),
         )
         create_response = httpx.Response(
             201,
-            json=[{"api_key": "gd_live_created"}],
+            json={},
             request=httpx.Request("POST", "https://test-project.supabase.co/rest/v1/api_keys"),
         )
 
@@ -325,25 +302,23 @@ class TestSupabaseAuth:
             mock_client = AsyncMock()
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.get = AsyncMock(return_value=empty_response)
+            mock_client.patch = AsyncMock(return_value=patch_response)
             mock_client.post = AsyncMock(return_value=create_response)
             mock_client_cls.return_value = mock_client
 
-            result = await supabase.get_or_create_api_key("uuid-123")
+            result = await supabase.create_mcp_oauth_key("uuid-123")
 
         assert result.startswith("gd_live_")
+        assert mock_client.patch.call_count == 1
+        assert mock_client.post.call_count == 1
 
-        # Verify the POST was called with correct body shape
+        # Verify the POST body shape
         call_args = mock_client.post.call_args
-        assert call_args is not None
-        # Check the body contains expected fields
-        body = call_args.kwargs.get("json") or (call_args[1].get("json") if len(call_args) > 1 else None)
-        if body is not None:
-            assert "key_hash" in body
-            assert "key_prefix" in body
-            # key_prefix should be first 12 chars of the plaintext key
-            assert len(body["key_prefix"]) == 12
-            assert body["key_prefix"] == result[:12]
+        body = call_args.kwargs["json"]
+        assert body["source"] == "mcp_oauth"
+        assert body["name"] == "MCP OAuth"
+        assert body["key_prefix"] == result[:12]
+        assert "key_plaintext" not in body
 
 
 # ---------------------------------------------------------------------------
@@ -643,7 +618,7 @@ class TestIntegrationLogin:
             patch.object(provider.supabase_auth, "authenticate", new_callable=AsyncMock, return_value="uuid-user-123"),
             patch.object(
                 provider.supabase_auth,
-                "get_or_create_api_key",
+                "create_mcp_oauth_key",
                 new_callable=AsyncMock,
                 return_value="gd_live_testkey123456",
             ),
@@ -776,7 +751,7 @@ class TestIntegrationFullFlow:
             patch.object(provider.supabase_auth, "authenticate", new_callable=AsyncMock, return_value="uuid-user-123"),
             patch.object(
                 provider.supabase_auth,
-                "get_or_create_api_key",
+                "create_mcp_oauth_key",
                 new_callable=AsyncMock,
                 return_value="gd_live_e2ekey12345",
             ),
@@ -844,7 +819,7 @@ class TestIntegrationFullFlow:
             patch.object(provider.supabase_auth, "authenticate", new_callable=AsyncMock, return_value="uuid-user-123"),
             patch.object(
                 provider.supabase_auth,
-                "get_or_create_api_key",
+                "create_mcp_oauth_key",
                 new_callable=AsyncMock,
                 return_value="gd_live_singleuse",
             ),
@@ -917,7 +892,7 @@ class TestIntegrationFullFlow:
             patch.object(provider.supabase_auth, "authenticate", new_callable=AsyncMock, return_value="uuid-user-123"),
             patch.object(
                 provider.supabase_auth,
-                "get_or_create_api_key",
+                "create_mcp_oauth_key",
                 new_callable=AsyncMock,
                 return_value="gd_live_statetest",
             ),
