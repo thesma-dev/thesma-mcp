@@ -16,7 +16,7 @@ from urllib.parse import urlencode
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, Response
 from thesma.client import AsyncThesmaClient
 from thesma.errors import ThesmaError
 
@@ -128,6 +128,7 @@ def _register_login_routes(
     """Register /login GET and POST routes for OAuth login flow."""
     from thesma_mcp.auth import (
         LOGIN_HTML,
+        SUCCESS_HTML,
         SupabaseAuthError,
         SupabaseDownError,
         ThesmaAuthCode,
@@ -190,7 +191,7 @@ def _register_login_routes(
             api_key=api_key,
         )
 
-        # Redirect to redirect_uri with code and state
+        # Build the redirect URL with code and state
         params: dict[str, str] = {"code": code}
         if pending.state:
             params["state"] = pending.state
@@ -199,7 +200,11 @@ def _register_login_routes(
         separator = "&" if "?" in redirect_uri else "?"
         redirect_url = f"{redirect_uri}{separator}{urlencode(params)}"
 
-        return RedirectResponse(url=redirect_url, status_code=302)
+        # Return a success page that immediately JS-redirects. The user briefly
+        # sees confirmation that our side worked; if Claude.ai's callback is slow
+        # or hangs, they still see our success state instead of a blank page.
+        success_html = SUCCESS_HTML.replace("{redirect_url}", redirect_url)
+        return HTMLResponse(success_html)
 
 
 def _register_tools() -> None:

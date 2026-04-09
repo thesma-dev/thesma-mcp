@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import time
 from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, urlparse
@@ -29,6 +30,16 @@ from thesma_mcp.auth import (
     ThesmaAuthCode,
     ThesmaOAuthProvider,
 )
+
+
+def _extract_redirect_url(body: str) -> str:
+    """Parse the redirect URL out of the success HTML page."""
+    match = re.search(r'window\.location\.href = "([^"]+)"', body)
+    if not match:
+        raise AssertionError(f"No redirect URL found in body:\n{body[:500]}")
+    # Unescape HTML entities
+    return match.group(1).replace("&amp;", "&")
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -566,8 +577,9 @@ class TestIntegration:
                 },
             )
 
-        assert response.status_code == 302
-        location = response.headers["location"]
+        assert response.status_code == 200
+        assert "Signed in successfully" in response.text
+        location = _extract_redirect_url(response.text)
         parsed = urlparse(location)
         params = parse_qs(parsed.query)
         assert "code" in params
@@ -694,8 +706,8 @@ class TestIntegration:
                     "session": session_token,
                 },
             )
-        assert login_resp.status_code == 302
-        location = login_resp.headers["location"]
+        assert login_resp.status_code == 200
+        location = _extract_redirect_url(login_resp.text)
         parsed = urlparse(location)
         query_params = parse_qs(parsed.query)
         auth_code = query_params["code"][0]
@@ -765,7 +777,7 @@ class TestIntegration:
                 "/login",
                 data={"email": "a@b.com", "password": "p", "session": session_token},
             )
-        auth_code = parse_qs(urlparse(login_resp.headers["location"]).query)["code"][0]
+        auth_code = parse_qs(urlparse(_extract_redirect_url(login_resp.text)).query)["code"][0]
 
         # First exchange — success
         resp1 = client.post(
@@ -841,7 +853,7 @@ class TestIntegration:
                 data={"email": "a@b.com", "password": "p", "session": session_token},
             )
 
-        location = login_resp.headers["location"]
+        location = _extract_redirect_url(login_resp.text)
         params = parse_qs(urlparse(location).query)
         assert params["state"] == [unique_state]
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import re
 import secrets
 import time
 from typing import Any
@@ -23,6 +24,15 @@ from mcp.server.auth.provider import AuthorizationParams, TokenError
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from pydantic import AnyUrl
 from starlette.testclient import TestClient
+
+
+def _extract_redirect_url(body: str) -> str:
+    """Parse the redirect URL out of the success HTML page."""
+    match = re.search(r'window\.location\.href = "([^"]+)"', body)
+    if not match:
+        raise AssertionError(f"No redirect URL found in body:\n{body[:500]}")
+    return match.group(1).replace("&amp;", "&")
+
 
 # ---------------------------------------------------------------------------
 # Helpers / factories
@@ -632,8 +642,9 @@ class TestIntegrationLogin:
                 },
             )
 
-        assert response.status_code == 302
-        location = response.headers.get("location", "")
+        assert response.status_code == 200
+        assert "Signed in successfully" in response.text
+        location = _extract_redirect_url(response.text)
         parsed = urlparse(location)
         query = parse_qs(parsed.query)
         assert "code" in query
@@ -766,8 +777,8 @@ class TestIntegrationFullFlow:
                 follow_redirects=False,
             )
 
-        assert login_response.status_code == 302
-        redirect_location = login_response.headers["location"]
+        assert login_response.status_code == 200
+        redirect_location = _extract_redirect_url(login_response.text)
         redirect_query = parse_qs(urlparse(redirect_location).query)
         code = redirect_query["code"][0]
         assert redirect_query["state"][0] == "e2e-state-value"
@@ -830,7 +841,7 @@ class TestIntegrationFullFlow:
                 follow_redirects=False,
             )
 
-        code = parse_qs(urlparse(login_response.headers["location"]).query)["code"][0]
+        code = parse_qs(urlparse(_extract_redirect_url(login_response.text)).query)["code"][0]
 
         # First exchange — should succeed
         token_response_1 = client.post(
@@ -903,7 +914,7 @@ class TestIntegrationFullFlow:
                 follow_redirects=False,
             )
 
-        redirect_location = login_response.headers["location"]
+        redirect_location = _extract_redirect_url(login_response.text)
         redirect_query = parse_qs(urlparse(redirect_location).query)
         assert redirect_query["state"][0] == unique_state
 
