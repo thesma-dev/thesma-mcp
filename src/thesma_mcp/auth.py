@@ -472,27 +472,14 @@ SUCCESS_HTML = """<!DOCTYPE html>
     p {
       color: #666;
       font-size: 14px;
-      margin-bottom: 20px;
     }
-    .fallback {
-      font-size: 13px;
-      color: #888;
-    }
-    .fallback a {
-      color: #2563eb;
-      text-decoration: none;
-    }
-    .fallback a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
   <div class="card">
     <div class="check">&#10003;</div>
     <h1>Signed in successfully</h1>
-    <p>Returning you to Claude&hellip;</p>
-    <div class="fallback">
-      If you're not redirected, <a href="{redirect_url}">click here to continue</a>.
-    </div>
+    <p>You can close this window and return to Claude.</p>
   </div>
   <script>
     // Delay briefly so the success card is visible before navigating away.
