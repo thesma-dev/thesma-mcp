@@ -424,3 +424,76 @@ LOGIN_HTML = """<!DOCTYPE html>
   </div>
 </body>
 </html>"""
+
+
+SUCCESS_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Thesma - Signed In</title>
+  <script>window.location.href = "{redirect_url}";</script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f5f5f5;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+    .card {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 2px 16px rgba(0,0,0,0.08);
+      padding: 40px;
+      width: 100%;
+      max-width: 400px;
+      text-align: center;
+    }
+    .check {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      background: #10b981;
+      color: white;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 32px;
+      margin-bottom: 16px;
+    }
+    h1 {
+      font-size: 20px;
+      font-weight: 600;
+      color: #111;
+      margin-bottom: 8px;
+    }
+    p {
+      color: #666;
+      font-size: 14px;
+      margin-bottom: 20px;
+    }
+    .fallback {
+      font-size: 13px;
+      color: #888;
+    }
+    .fallback a {
+      color: #2563eb;
+      text-decoration: none;
+    }
+    .fallback a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="check">&#10003;</div>
+    <h1>Signed in successfully</h1>
+    <p>Returning you to Claude&hellip;</p>
+    <div class="fallback">
+      If you're not redirected, <a href="{redirect_url}">click here to continue</a>.
+    </div>
+  </div>
+</body>
+</html>"""
