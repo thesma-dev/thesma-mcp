@@ -55,8 +55,22 @@ cp .env.example .env  # then fill in THESMA_API_KEY
 The MCP server is deployed on Railway via Streamable HTTP.
 
 - **Dockerfile**: Does NOT set `THESMA_MCP_TRANSPORT` — must be passed at runtime
-- **Railway env vars**: `THESMA_MCP_TRANSPORT=http`, `THESMA_API_KEY` (optional — enables free-tier fallback), `PORT` (set by Railway)
+- **Railway env vars**:
+  - `THESMA_MCP_TRANSPORT=http` (required)
+  - `PORT` (set by Railway automatically)
+  - `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` (enables OAuth via Supabase Auth)
+  - `MCP_BASE_URL` (OAuth issuer URL, e.g. `https://thesma-mcp-production.up.railway.app`)
+  - `THESMA_API_KEY` (optional — default fallback key if no OAuth / no Bearer header)
 - **Health check**: `GET /health` on the Railway domain
+- **Auto-deploy not wired** — see memory `feedback_gh_account` for why. Deploys happen via `railway up` from local CLI.
+
+## Versioning
+
+Version format: `<api_major>.<api_minor>.<api_patch>.<mcp_release>` — e.g., `0.9.0.1`. First three parts mirror the thesma SDK/API version; fourth is the MCP's release counter within that API version. Update `pyproject.toml`, `src/thesma_mcp/__init__.py`, and `tests/test_version.py` together.
+
+## Supabase schema
+
+The `api_keys` (and other Supabase-managed) tables are owned by the `govdata-api` repo at `supabase/migrations/`. Do NOT put schema migrations in this repo. When a code change here needs a schema change, write a `T-<next>` prompt for govdata-api and apply the migration BEFORE deploying this repo.
 
 ## Conventions
 
