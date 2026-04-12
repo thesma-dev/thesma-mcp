@@ -1,6 +1,6 @@
 # Thesma MCP Server
 
-Give your AI assistant access to SEC EDGAR financial data.
+Give your AI assistant access to SEC, Census, and BLS data.
 
 [![PyPI version](https://img.shields.io/pypi/v/thesma-mcp)](https://pypi.org/project/thesma-mcp/)
 [![Python](https://img.shields.io/pypi/pyversions/thesma-mcp)](https://pypi.org/project/thesma-mcp/)
@@ -8,9 +8,7 @@ Give your AI assistant access to SEC EDGAR financial data.
 
 ## What it does
 
-An [MCP](https://modelcontextprotocol.io/) server that wraps the [Thesma API](https://thesma.dev), giving AI assistants (Claude, Cursor, ChatGPT) native access to SEC EDGAR data — financials, ratios, insider trades, institutional holdings, executive compensation, and more.
-
-Ask questions in plain English. Get structured financial data back.
+An [MCP](https://modelcontextprotocol.io/) server that wraps the [Thesma API](https://thesma.dev), giving AI assistants (Claude, Cursor, ChatGPT) native access to SEC EDGAR filings, Bureau of Labor Statistics employment data, and US Census Bureau demographics. Ask questions in plain English, get structured data back.
 
 ## Quick example
 
@@ -25,6 +23,14 @@ The AI calls `screen_companies` with margin filters and insider buying signals.
 > "Which funds increased their position in NVDA last quarter?"
 
 The AI calls `get_holding_changes` and shows quarter-over-quarter position changes.
+
+> "What's the average wage for software developers in Texas?"
+
+The AI calls `get_occupation_wages` with SOC code 15-1252 and state filter, returning median and percentile wage data.
+
+> "What does Apple's labor market look like — hiring trends, local wages, compensation benchmarks?"
+
+The AI calls `get_company` for AAPL, which automatically includes BLS labor market context alongside SEC company details.
 
 ## Installation
 
@@ -70,7 +76,7 @@ Add to `~/.cursor/mcp.json`:
 
 > **Using `pip install` instead of `uvx`?** If you've already installed `thesma-mcp` with pip, you can use `"command": "thesma-mcp"` directly (no `args` needed) instead of `uvx`.
 
-Get your API key at [portal.thesma.dev](https://portal.thesma.dev) (free tier: 1,000 requests/day).
+Get your API key at [portal.thesma.dev](https://portal.thesma.dev) (free tier: 250 requests/day).
 
 ## Available tools
 
@@ -135,6 +141,47 @@ Get your API key at [portal.thesma.dev](https://portal.thesma.dev) (free tier: 1
 |------|-------------|
 | `search_filings` | Search SEC filings by company, type (10-K, 10-Q, 8-K, etc.), and date range |
 
+### Industry Lookup
+
+| Tool | Description |
+|------|-------------|
+| `search_industries` | Find BLS industries by name or NAICS level |
+| `get_industry_detail` | Get industry details — child industries, data availability across CES/QCEW/OEWS |
+
+### Industry Employment (CES)
+
+| Tool | Description |
+|------|-------------|
+| `get_industry_employment` | Get employment, earnings, and hours data for an industry by NAICS code |
+
+### County Employment & Wages (QCEW)
+
+| Tool | Description |
+|------|-------------|
+| `get_county_employment` | Get quarterly employment data for a US county by FIPS code |
+| `get_county_wages` | Get county wage snapshot with location quotients vs. national average |
+
+### Occupation Wages (OEWS)
+
+| Tool | Description |
+|------|-------------|
+| `search_occupations` | Find BLS occupations by name or SOC group |
+| `get_occupation_wages` | Get occupation wage data — mean, median, and percentile distribution |
+
+### Labor Market Turnover (JOLTS)
+
+| Tool | Description |
+|------|-------------|
+| `get_industry_turnover` | Get job openings, hires, quits, and layoffs for an industry |
+| `get_state_turnover` | Get state-level labor market turnover (total nonfarm) |
+| `get_regional_turnover` | Get turnover data for a Census region (Northeast, South, Midwest, West) |
+
+### BLS Discovery
+
+| Tool | Description |
+|------|-------------|
+| `explore_bls_metrics` | Browse available BLS metrics by category, source, or keyword |
+
 ## Configuration
 
 | Variable | Required | Description |
@@ -144,15 +191,18 @@ Get your API key at [portal.thesma.dev](https://portal.thesma.dev) (free tier: 1
 
 ## Data coverage
 
-- ~1,000 US public companies (Russell 1000 + S&P 500)
-- Financial statements from 2009-present (iXBRL and companyfacts sources)
-- Insider trades, institutional holdings, executive compensation, board data
-- Data sourced from SEC EDGAR (public domain)
+- ~3,000 US public companies — about 98% of the investable US equity market by market cap
+- **SEC EDGAR:** financial statements (2009-present), insider trades, institutional holdings, executive compensation, board data, corporate events, filings
+- **Bureau of Labor Statistics:** industry employment (CES), county wages (QCEW), occupation wages (OEWS), job openings and turnover (JOLTS)
+- **Labor market enrichment:** `get_company` automatically includes BLS labor context; `screen_companies` supports labor market filters
+- All data sourced from US federal public-domain sources: SEC EDGAR, US Census Bureau, Bureau of Labor Statistics
 
 ## Links
 
-- [Thesma API docs](https://docs.thesma.dev)
+- [Thesma API docs](https://api.thesma.dev/docs)
 - [Developer portal](https://portal.thesma.dev)
+- [Pricing](https://thesma.dev/pricing)
+- [Security & data rights](https://thesma.dev/security)
 - [Website](https://thesma.dev)
 
 ## License
