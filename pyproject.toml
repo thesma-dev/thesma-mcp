@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "thesma-mcp"
-version = "0.9.0.1"
-description = "MCP server for SEC EDGAR financial data — give your AI assistant access to company financials, ratios, insider trades, and more"
+version = "0.9.0.2"
+description = "MCP server for SEC, BLS, and US Census data — give your AI assistant native access to financials, labor market stats, and demographics"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.12"
@@ -28,7 +28,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://thesma.dev"
-Documentation = "https://docs.thesma.dev"
+Documentation = "https://api.thesma.dev/docs"
 Repository = "https://github.com/thesma-dev/thesma-mcp"
 Issues = "https://github.com/thesma-dev/thesma-mcp/issues"
 
