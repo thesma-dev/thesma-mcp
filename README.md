@@ -176,6 +176,15 @@ Get your API key at [portal.thesma.dev](https://portal.thesma.dev) (free tier: 2
 | `get_state_turnover` | Get state-level labor market turnover (total nonfarm) |
 | `get_regional_turnover` | Get turnover data for a Census region (Northeast, South, Midwest, West) |
 
+### Local Area Unemployment (LAUS)
+
+| Tool | Description |
+|------|-------------|
+| `get_county_unemployment` | Get monthly unemployment rate, labor force, and employment for a US county (never seasonally adjusted) |
+| `compare_county_unemployment` | Compare unemployment metrics across up to 10 counties in a single period |
+| `get_state_unemployment` | Get monthly state unemployment with labor force participation rate and employment-population ratio (SA or NSA) |
+| `compare_state_unemployment` | Compare unemployment metrics across up to 10 states in a single period |
+
 ### BLS Discovery
 
 | Tool | Description |
@@ -193,7 +202,7 @@ Get your API key at [portal.thesma.dev](https://portal.thesma.dev) (free tier: 2
 
 - ~3,000 US public companies — about 98% of the investable US equity market by market cap
 - **SEC EDGAR:** financial statements (2009-present), insider trades, institutional holdings, executive compensation, board data, corporate events, filings
-- **Bureau of Labor Statistics:** industry employment (CES), county wages (QCEW), occupation wages (OEWS), job openings and turnover (JOLTS)
+- **Bureau of Labor Statistics:** industry employment (CES), county wages (QCEW), occupation wages (OEWS), job openings and turnover (JOLTS), local unemployment (LAUS)
 - **Labor market enrichment:** `get_company` automatically includes BLS labor context; `screen_companies` supports labor market filters
 - All data sourced from US federal public-domain sources: SEC EDGAR, US Census Bureau, Bureau of Labor Statistics
 

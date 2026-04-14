@@ -203,3 +203,104 @@ async def test_screen_jolts_filter_in_summary_header() -> None:
     ctx = _make_ctx(resp)
     result = await screen_companies(ctx, min_industry_quits_rate=2.0)
     assert "industry quits rate >= 2.0%" in result
+
+
+# --- LAUS filter tests ---
+
+
+class TestScreenerLausFilters:
+    @pytest.mark.asyncio
+    async def test_local_unemployment_rate_param_sent(self) -> None:
+        """min_local_unemployment_rate forwards through to the SDK call."""
+        companies = [_make_screener_item(ratios={"gross_margin": 45.6})]
+        resp = _make_paginated_response(companies)
+        ctx = _make_ctx(resp)
+        await screen_companies(ctx, min_local_unemployment_rate=5.0)
+        kwargs = ctx.request_context.lifespan_context.client.screener.screen.await_args.kwargs
+        assert kwargs["min_local_unemployment_rate"] == 5.0
+
+    @pytest.mark.asyncio
+    async def test_local_labor_force_param_sent(self) -> None:
+        companies = [_make_screener_item(ratios={"gross_margin": 45.6})]
+        resp = _make_paginated_response(companies)
+        ctx = _make_ctx(resp)
+        await screen_companies(ctx, min_local_labor_force=500000)
+        kwargs = ctx.request_context.lifespan_context.client.screener.screen.await_args.kwargs
+        assert kwargs["min_local_labor_force"] == 500000
+
+    @pytest.mark.asyncio
+    async def test_local_unemployment_trend_param_sent(self) -> None:
+        companies = [_make_screener_item(ratios={"gross_margin": 45.6})]
+        resp = _make_paginated_response(companies)
+        ctx = _make_ctx(resp)
+        await screen_companies(ctx, local_unemployment_trend="rising")
+        kwargs = ctx.request_context.lifespan_context.client.screener.screen.await_args.kwargs
+        assert kwargs["local_unemployment_trend"] == "rising"
+
+    @pytest.mark.asyncio
+    async def test_max_local_unemployment_rate_param_sent(self) -> None:
+        companies = [_make_screener_item(ratios={"gross_margin": 45.6})]
+        resp = _make_paginated_response(companies)
+        ctx = _make_ctx(resp)
+        await screen_companies(ctx, max_local_unemployment_rate=8.0)
+        kwargs = ctx.request_context.lifespan_context.client.screener.screen.await_args.kwargs
+        assert kwargs["max_local_unemployment_rate"] == 8.0
+
+    @pytest.mark.asyncio
+    async def test_laus_columns_in_table_nested(self) -> None:
+        """LAUS columns render when labor_context is nested with .local_market."""
+        companies = [
+            _make_screener_item(
+                ratios={"gross_margin": 45.6},
+                labor_context={
+                    "local_market": {
+                        "county_name": "Alameda County",
+                        "unemployment_rate": 4.2,
+                        "labor_force": 800000,
+                    }
+                },
+            ),
+        ]
+        resp = _make_paginated_response(companies)
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx, min_local_unemployment_rate=4.0)
+        assert "Unemp Rate" in result
+        assert "Labor Force" in result
+        assert "4.2%" in result
+        assert "Alameda County" in result
+
+    @pytest.mark.asyncio
+    async def test_laus_columns_in_table_flat(self) -> None:
+        """LAUS columns also render when labor_context is flat (legacy shape)."""
+        companies = [
+            _make_screener_item(
+                ratios={"gross_margin": 45.6},
+                labor_context={
+                    "county_name": "Alameda County",
+                    "unemployment_rate": 4.2,
+                    "labor_force": 800000,
+                },
+            ),
+        ]
+        resp = _make_paginated_response(companies)
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx, min_local_unemployment_rate=4.0)
+        assert "Unemp Rate" in result
+        assert "4.2%" in result
+        assert "Alameda County" in result
+
+    @pytest.mark.asyncio
+    async def test_laus_filter_in_summary_header(self) -> None:
+        companies = [_make_screener_item(ratios={"gross_margin": 45.6})]
+        resp = _make_paginated_response(companies)
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx, min_local_unemployment_rate=5.0)
+        assert "local unemployment rate >= 5.0%" in result
+
+    @pytest.mark.asyncio
+    async def test_laus_trend_in_summary_header(self) -> None:
+        companies = [_make_screener_item(ratios={"gross_margin": 45.6})]
+        resp = _make_paginated_response(companies)
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx, local_unemployment_trend="rising")
+        assert "local unemployment trend: rising" in result
