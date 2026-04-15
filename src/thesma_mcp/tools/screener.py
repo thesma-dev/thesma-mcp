@@ -7,7 +7,7 @@ from typing import Any
 from mcp.server.fastmcp import Context
 from thesma.errors import ThesmaError
 
-from thesma_mcp.formatters import format_percent, format_table
+from thesma_mcp.formatters import format_number, format_percent, format_table
 from thesma_mcp.server import get_client, mcp
 
 _JOLTS_FILTER_KEYS = {
@@ -22,6 +22,20 @@ JOLTS_FIELD_LABELS: dict[str, str] = {
     "max_industry_quits_rate": "industry quits rate",
     "min_industry_openings_rate": "industry openings rate",
     "max_industry_openings_rate": "industry openings rate",
+}
+
+_LAUS_FILTER_KEYS = {
+    "min_local_unemployment_rate",
+    "max_local_unemployment_rate",
+    "local_unemployment_trend",
+    "min_local_labor_force",
+}
+
+LAUS_FIELD_LABELS: dict[str, str] = {
+    "min_local_unemployment_rate": "local unemployment rate",
+    "max_local_unemployment_rate": "local unemployment rate",
+    "local_unemployment_trend": "local unemployment trend",
+    "min_local_labor_force": "local labor force",
 }
 
 VALID_SORT_FIELDS = {
@@ -120,6 +134,23 @@ def _build_summary_header(params: dict[str, Any]) -> str:
             else:
                 filters.append(f"{label} {op} {val}")
 
+    # LAUS filters
+    laus_filter_map: list[tuple[str, str, str]] = [
+        ("min_local_unemployment_rate", "local unemployment rate", ">="),
+        ("max_local_unemployment_rate", "local unemployment rate", "<="),
+        ("min_local_labor_force", "local labor force", ">="),
+    ]
+    for param_name, label, op in laus_filter_map:
+        val = params.get(param_name)
+        if val is not None:
+            if "rate" in label:
+                filters.append(f"{label} {op} {val}%")
+            else:
+                filters.append(f"{label} {op} {val}")
+    trend_val = params.get("local_unemployment_trend")
+    if trend_val is not None:
+        filters.append(f"local unemployment trend: {trend_val}")
+
     prefix = " ".join(parts) + " companies" if parts else "Companies"
     if filters:
         return f"{prefix} with {' and '.join(filters)}"
@@ -188,6 +219,52 @@ def _get_column_value(company: Any, col: str) -> str:
     return format_percent(val)
 
 
+def _get_local_market(company: Any) -> dict[str, Any] | None:
+    """Extract the LocalMarketContext sub-object as a dict.
+
+    The screener API serialises ``labor_context`` as either a nested object
+    (``labor_context.local_market.{unemployment_rate, ...}``) or a flat dict
+    where the LocalMarketContext fields are merged into ``labor_context``
+    itself. This helper handles both shapes — verified empirically in
+    ``tests/test_screener.py`` against ``ScreenerResultItem(extra='allow')``.
+    Returns ``None`` when no labor context is attached.
+    """
+    labor = getattr(company, "labor_context", None)
+    if labor is None:
+        return None
+    # Try nested .local_market first (matches the SDK model).
+    nested: Any = None
+    if isinstance(labor, dict):
+        nested = labor.get("local_market")
+    else:
+        nested = getattr(labor, "local_market", None)
+    if nested is not None:
+        if isinstance(nested, dict):
+            return nested
+        return {
+            "county_name": getattr(nested, "county_name", None),
+            "unemployment_rate": getattr(nested, "unemployment_rate", None),
+            "labor_force": getattr(nested, "labor_force", None),
+        }
+    # Fall back to flat dict shape (legacy JOLTS-style serialisation).
+    if isinstance(labor, dict):
+        if any(k in labor for k in ("unemployment_rate", "labor_force", "county_name")):
+            return {
+                "county_name": labor.get("county_name"),
+                "unemployment_rate": labor.get("unemployment_rate"),
+                "labor_force": labor.get("labor_force"),
+            }
+        return None
+    # Object with flat attrs.
+    if any(hasattr(labor, k) for k in ("unemployment_rate", "labor_force", "county_name")):
+        return {
+            "county_name": getattr(labor, "county_name", None),
+            "unemployment_rate": getattr(labor, "unemployment_rate", None),
+            "labor_force": getattr(labor, "labor_force", None),
+        }
+    return None
+
+
 _BLS_FILTER_KEYS = {
     "industry_hiring_trend",
     "min_industry_employment_growth",
@@ -213,7 +290,8 @@ BLS_FIELD_LABELS: dict[str, str] = {
         "Combine filters: profitability (margins), growth rates, leverage ratios, "
         "index membership, SIC code, and insider/institutional signals. "
         "Supports labor market filters: industry hiring trend, employment growth, "
-        "wage growth, and comp-to-market ratio. "
+        "wage growth, comp-to-market ratio, and HQ-county LAUS local unemployment "
+        "(min/max local unemployment rate, local unemployment trend, min local labor force). "
         "Sort by any ratio: gross_margin, operating_margin, net_margin, return_on_equity, "
         "return_on_assets, debt_to_equity, current_ratio, interest_coverage, "
         "revenue_growth_yoy, net_income_growth_yoy, eps_growth_yoy."
@@ -242,6 +320,10 @@ async def screen_companies(
     max_industry_quits_rate: float | None = None,
     min_industry_openings_rate: float | None = None,
     max_industry_openings_rate: float | None = None,
+    min_local_unemployment_rate: float | None = None,
+    max_local_unemployment_rate: float | None = None,
+    local_unemployment_trend: str | None = None,
+    min_local_labor_force: int | None = None,
     sort: str | None = None,
     order: str | None = None,
     limit: int = 20,
@@ -286,6 +368,10 @@ async def screen_companies(
         "max_industry_quits_rate": max_industry_quits_rate,
         "min_industry_openings_rate": min_industry_openings_rate,
         "max_industry_openings_rate": max_industry_openings_rate,
+        "min_local_unemployment_rate": min_local_unemployment_rate,
+        "max_local_unemployment_rate": max_local_unemployment_rate,
+        "local_unemployment_trend": local_unemployment_trend,
+        "min_local_labor_force": min_local_labor_force,
         "sort": sort,
         "order": order,
         "industry_hiring_trend": industry_hiring_trend,
@@ -323,6 +409,10 @@ async def screen_companies(
             max_industry_quits_rate=max_industry_quits_rate,
             min_industry_openings_rate=min_industry_openings_rate,
             max_industry_openings_rate=max_industry_openings_rate,
+            min_local_unemployment_rate=min_local_unemployment_rate,
+            max_local_unemployment_rate=max_local_unemployment_rate,
+            local_unemployment_trend=local_unemployment_trend,
+            min_local_labor_force=min_local_labor_force,
             sort_by=sort,
             order=order,
             industry_hiring_trend=industry_hiring_trend,
@@ -368,6 +458,12 @@ async def screen_companies(
         headers.extend(["Quits Rate", "Openings Rate", "Tightness"])
         alignments.extend(["r", "r", "r"])
 
+    # Add LAUS columns when LAUS filters are active
+    has_laus_filter = any(local_params.get(k) is not None for k in _LAUS_FILTER_KEYS)
+    if has_laus_filter:
+        headers.extend(["County", "Unemp Rate", "Labor Force"])
+        alignments.extend(["l", "r", "r"])
+
     rows: list[list[str]] = []
     for i, company in enumerate(data, 1):
         # ScreenerResultItem uses extra="allow"
@@ -399,6 +495,17 @@ async def screen_companies(
                 row.append(format_percent(getattr(labor, "industry_openings_rate", None)))
                 tightness = getattr(labor, "labour_market_tightness", None)
                 row.append(f"{tightness:.2f}" if tightness is not None else "N/A")
+        if has_laus_filter:
+            local_market = _get_local_market(company)
+            if local_market is None:
+                row.extend(["", "N/A", "N/A"])
+            else:
+                county_name = local_market.get("county_name") or ""
+                ur = local_market.get("unemployment_rate")
+                lf = local_market.get("labor_force")
+                row.append(str(county_name))
+                row.append(f"{ur:.1f}%" if ur is not None else "N/A")
+                row.append(format_number(lf, decimals=0) if lf is not None else "N/A")
         rows.append(row)
 
     table = format_table(headers, rows, alignments)

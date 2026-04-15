@@ -211,6 +211,7 @@ def _register_tools() -> None:
     """Import tool modules to trigger @mcp.tool() registration."""
     import thesma_mcp.tools.bls_counties as _bls_counties_tools  # noqa: F401
     import thesma_mcp.tools.bls_industries as _bls_industries_tools  # noqa: F401
+    import thesma_mcp.tools.bls_laus as _bls_laus_tools  # noqa: F401
     import thesma_mcp.tools.bls_metrics as _bls_metrics_tools  # noqa: F401
     import thesma_mcp.tools.bls_occupations as _bls_occupations_tools  # noqa: F401
     import thesma_mcp.tools.bls_turnover as _bls_turnover_tools  # noqa: F401
