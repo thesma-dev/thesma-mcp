@@ -8,7 +8,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from thesma.errors import ThesmaError
 
-from thesma_mcp.tools.companies import _format_labor_context, get_company, search_companies
+from thesma_mcp.tools.companies import (
+    _format_labor_context,
+    _parse_exchange,
+    _render_exchange,
+    get_company,
+    search_companies,
+)
 
 
 def _make_paginated_response(items: list[dict[str, Any]], total: int | None = None) -> Any:
@@ -269,3 +275,194 @@ class TestFormatLaborContext:
         assert "\u25b2" not in result
         assert "\u25bc" not in result
         assert "500.0" in result
+
+
+class TestSearchCompaniesExchangeDomicile:
+    async def test_search_with_exchange_single(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        empty = _make_paginated_response([])
+        results = _make_paginated_response(
+            [{"cik": "0000320193", "ticker": "AAPL", "name": "Apple Inc.", "company_tier": "sp500"}]
+        )
+        app.client.companies.list = AsyncMock(side_effect=[empty, results])
+        await search_companies("apple", mock_ctx, exchange="nyse")
+        # Second call is the name-search branch — assert it carried the filter.
+        kwargs = app.client.companies.list.call_args_list[1].kwargs
+        assert kwargs.get("exchange") == "nyse"
+
+    async def test_search_with_exchange_multi_comma(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        empty = _make_paginated_response([])
+        results = _make_paginated_response(
+            [{"cik": "0000320193", "ticker": "AAPL", "name": "Apple Inc.", "company_tier": "sp500"}]
+        )
+        app.client.companies.list = AsyncMock(side_effect=[empty, results])
+        await search_companies("apple", mock_ctx, exchange="nyse, nasdaq")
+        kwargs = app.client.companies.list.call_args_list[1].kwargs
+        assert kwargs.get("exchange") == ["nyse", "nasdaq"]
+
+    async def test_search_with_exchange_empty_string(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        empty = _make_paginated_response([])
+        results = _make_paginated_response(
+            [{"cik": "0000320193", "ticker": "AAPL", "name": "Apple Inc.", "company_tier": "sp500"}]
+        )
+        app.client.companies.list = AsyncMock(side_effect=[empty, results])
+        await search_companies("apple", mock_ctx, exchange="")
+        kwargs = app.client.companies.list.call_args_list[1].kwargs
+        assert kwargs.get("exchange") is None
+
+    async def test_search_with_exchange_whitespace_only(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        empty = _make_paginated_response([])
+        results = _make_paginated_response(
+            [{"cik": "0000320193", "ticker": "AAPL", "name": "Apple Inc.", "company_tier": "sp500"}]
+        )
+        app.client.companies.list = AsyncMock(side_effect=[empty, results])
+        await search_companies("apple", mock_ctx, exchange="  ,  ")
+        kwargs = app.client.companies.list.call_args_list[1].kwargs
+        assert kwargs.get("exchange") is None
+
+    async def test_search_with_domicile(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        empty = _make_paginated_response([])
+        results = _make_paginated_response(
+            [{"cik": "0000320193", "ticker": "AAPL", "name": "Apple Inc.", "company_tier": "sp500"}]
+        )
+        app.client.companies.list = AsyncMock(side_effect=[empty, results])
+        await search_companies("apple", mock_ctx, domicile="us")
+        kwargs = app.client.companies.list.call_args_list[1].kwargs
+        assert kwargs.get("domicile") == "us"
+
+    async def test_search_table_renders_exchange_domicile(self, mock_ctx: MagicMock) -> None:
+        from thesma._generated.models import Domicile, Exchange
+
+        app = _app(mock_ctx)
+        empty = _make_paginated_response([])
+        results = _make_paginated_response(
+            [
+                {
+                    "cik": "0000320193",
+                    "ticker": "AAPL",
+                    "name": "Apple Inc.",
+                    "company_tier": "sp500",
+                    "exchange": Exchange.NASDAQ,
+                    "domicile": Domicile.us,
+                }
+            ]
+        )
+        app.client.companies.list = AsyncMock(side_effect=[empty, results])
+        result = await search_companies("apple", mock_ctx)
+        assert "Exchange" in result
+        assert "Domicile" in result
+        assert "NASDAQ" in result
+        assert "Exchange.NASDAQ" not in result  # enum repr must not leak
+        assert "us" in result
+
+    async def test_search_table_renders_none_as_dash(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        empty = _make_paginated_response([])
+        results = _make_paginated_response(
+            [
+                {
+                    "cik": "0000320193",
+                    "ticker": "AAPL",
+                    "name": "Apple Inc.",
+                    "company_tier": "sp500",
+                    "exchange": None,
+                    "domicile": None,
+                }
+            ]
+        )
+        app.client.companies.list = AsyncMock(side_effect=[empty, results])
+        result = await search_companies("apple", mock_ctx)
+        assert "—" in result
+
+    async def test_search_invalid_exchange_propagates_badrequest(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        # Ticker branch fails first, then name-search raises BadRequestError.
+        app.client.companies.list = AsyncMock(side_effect=[ThesmaError("pass"), ThesmaError("Invalid exchange 'amex'")])
+        result = await search_companies("apple", mock_ctx, exchange="amex")
+        assert "Invalid exchange" in result
+
+
+class TestGetCompanyExchangeDomicile:
+    async def test_get_company_renders_exchange_domicile(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        app.client.companies.get = AsyncMock(
+            return_value=_make_data_response(
+                {
+                    "name": "Apple Inc.",
+                    "cik": "0000320193",
+                    "ticker": "AAPL",
+                    "sic_code": "3571",
+                    "sic_description": "Electronic Computers",
+                    "company_tier": "sp500",
+                    "fiscal_year_end": "0930",
+                    "exchange": "NASDAQ",
+                    "domicile": "us",
+                }
+            )
+        )
+        result = await get_company("AAPL", mock_ctx)
+        assert "Exchange:" in result
+        assert "NASDAQ" in result
+        assert "Domicile:" in result
+        assert "us" in result
+
+    async def test_get_company_null_exchange_domicile(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        app.client.companies.get = AsyncMock(
+            return_value=_make_data_response(
+                {
+                    "name": "Apple Inc.",
+                    "cik": "0000320193",
+                    "ticker": "AAPL",
+                    "sic_code": "3571",
+                    "sic_description": "Electronic Computers",
+                    "company_tier": "sp500",
+                    "fiscal_year_end": "0930",
+                    "exchange": None,
+                    "domicile": None,
+                }
+            )
+        )
+        result = await get_company("AAPL", mock_ctx)
+        assert "Exchange:" in result
+        assert "Domicile:" in result
+        assert "—" in result
+
+
+class TestParseExchangeHelper:
+    def test_none_returns_none(self) -> None:
+        assert _parse_exchange(None) is None
+
+    def test_empty_string_returns_none(self) -> None:
+        assert _parse_exchange("") is None
+
+    def test_whitespace_only_returns_none(self) -> None:
+        assert _parse_exchange("  ,  ") is None
+
+    def test_single_item_returns_string(self) -> None:
+        assert _parse_exchange("nyse") == "nyse"
+
+    def test_multi_item_returns_list(self) -> None:
+        assert _parse_exchange("nyse,nasdaq") == ["nyse", "nasdaq"]
+
+    def test_strips_whitespace(self) -> None:
+        assert _parse_exchange(" nyse , nasdaq ") == ["nyse", "nasdaq"]
+
+
+class TestRenderExchangeHelper:
+    def test_none_renders_dash(self) -> None:
+        assert _render_exchange(None) == "—"
+
+    def test_plain_string_passes_through(self) -> None:
+        assert _render_exchange("NYSE") == "NYSE"
+
+    def test_enum_member_renders_value(self) -> None:
+        from thesma._generated.models import Exchange
+
+        assert _render_exchange(Exchange.NYSE) == "NYSE"

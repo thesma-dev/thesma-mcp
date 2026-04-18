@@ -304,3 +304,147 @@ class TestScreenerLausFilters:
         ctx = _make_ctx(resp)
         result = await screen_companies(ctx, local_unemployment_trend="rising")
         assert "local unemployment trend: rising" in result
+
+
+class TestScreenerExchangeDomicileFilters:
+    @pytest.mark.asyncio
+    async def test_screen_exchange_single_param_sent(self) -> None:
+        resp = _make_paginated_response(_default_companies())
+        ctx = _make_ctx(resp)
+        app = ctx.request_context.lifespan_context
+        await screen_companies(ctx, exchange="nyse")
+        assert app.client.screener.screen.call_args.kwargs.get("exchange") == "nyse"
+
+    @pytest.mark.asyncio
+    async def test_screen_exchange_multi_param_sent(self) -> None:
+        resp = _make_paginated_response(_default_companies())
+        ctx = _make_ctx(resp)
+        app = ctx.request_context.lifespan_context
+        await screen_companies(ctx, exchange="nyse,nasdaq")
+        assert app.client.screener.screen.call_args.kwargs.get("exchange") == ["nyse", "nasdaq"]
+
+    @pytest.mark.asyncio
+    async def test_screen_domicile_param_sent(self) -> None:
+        resp = _make_paginated_response(_default_companies())
+        ctx = _make_ctx(resp)
+        app = ctx.request_context.lifespan_context
+        await screen_companies(ctx, domicile="us")
+        assert app.client.screener.screen.call_args.kwargs.get("domicile") == "us"
+
+    @pytest.mark.asyncio
+    async def test_screen_exchange_and_domicile_combined(self) -> None:
+        resp = _make_paginated_response(_default_companies())
+        ctx = _make_ctx(resp)
+        app = ctx.request_context.lifespan_context
+        await screen_companies(ctx, tier="sp500", exchange="nyse", domicile="us")
+        kwargs = app.client.screener.screen.call_args.kwargs
+        assert kwargs.get("tier") == "sp500"
+        assert kwargs.get("exchange") == "nyse"
+        assert kwargs.get("domicile") == "us"
+
+    @pytest.mark.asyncio
+    async def test_screen_empty_exchange_not_forwarded(self) -> None:
+        resp = _make_paginated_response(_default_companies())
+        ctx = _make_ctx(resp)
+        app = ctx.request_context.lifespan_context
+        await screen_companies(ctx, exchange="")
+        assert app.client.screener.screen.call_args.kwargs.get("exchange") is None
+
+    @pytest.mark.asyncio
+    async def test_screen_summary_header_includes_exchange_and_domicile(self) -> None:
+        companies = [_make_screener_item(ratios={"gross_margin": 45.6})]
+        resp = _make_paginated_response(companies)
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx, exchange="nyse", domicile="us")
+        assert "exchange: nyse" in result
+        assert "domicile: us" in result
+
+    @pytest.mark.asyncio
+    async def test_screen_summary_header_multi_exchange(self) -> None:
+        companies = [_make_screener_item(ratios={"gross_margin": 45.6})]
+        resp = _make_paginated_response(companies)
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx, exchange="nyse,nasdaq")
+        assert "exchange in nyse, nasdaq" in result
+
+    @pytest.mark.asyncio
+    async def test_screen_table_renders_exchange_domicile_columns(self) -> None:
+        item = _make_screener_item(ratios={"gross_margin": 45.6})
+        item.exchange = "NYSE"
+        item.domicile = "us"
+        resp = _make_paginated_response([item])
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx)
+        assert "Exchange" in result
+        assert "Domicile" in result
+        assert "NYSE" in result
+        assert "us" in result
+
+    @pytest.mark.asyncio
+    async def test_screen_table_renders_null_exchange_domicile_columns(self) -> None:
+        item = _make_screener_item(ratios={"gross_margin": 45.6})
+        item.exchange = None
+        item.domicile = None
+        resp = _make_paginated_response([item])
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx)
+        assert "Exchange" in result
+        assert "Domicile" in result
+        assert "—" in result
+
+    @pytest.mark.asyncio
+    async def test_screen_exchange_domicile_columns_always_render(self) -> None:
+        """Columns render for every result, not only when the new filters are active."""
+        item = _make_screener_item(ratios={"gross_margin": 45.6})
+        item.exchange = "NYSE"
+        item.domicile = "us"
+        resp = _make_paginated_response([item])
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx)  # no filters at all
+        assert "Exchange" in result
+        assert "Domicile" in result
+
+    @pytest.mark.asyncio
+    async def test_screen_preserves_jolts_columns_when_exchange_filter_active(self) -> None:
+        """Regression: the new Exchange/Domicile columns must not displace the JOLTS column group."""
+        item = _make_screener_item(
+            ratios={"gross_margin": 45.6},
+            labor_context={
+                "industry_quits_rate": 2.5,
+                "industry_openings_rate": 5.0,
+                "labour_market_tightness": 1.8,
+            },
+        )
+        item.exchange = "NYSE"
+        item.domicile = "us"
+        resp = _make_paginated_response([item])
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx, exchange="nyse", min_industry_quits_rate=2.0)
+        assert "Exchange" in result
+        assert "Domicile" in result
+        assert "Quits Rate" in result
+        assert "Openings Rate" in result
+
+    @pytest.mark.asyncio
+    async def test_screen_preserves_laus_columns_when_domicile_filter_active(self) -> None:
+        """Regression: the new Exchange/Domicile columns must not displace the LAUS column group."""
+        item = _make_screener_item(
+            ratios={"gross_margin": 45.6},
+            labor_context={
+                "local_market": {
+                    "county_name": "Alameda County",
+                    "unemployment_rate": 4.2,
+                    "labor_force": 800_000,
+                }
+            },
+        )
+        item.exchange = "NYSE"
+        item.domicile = "us"
+        resp = _make_paginated_response([item])
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx, domicile="us", min_local_unemployment_rate=4.0)
+        assert "Exchange" in result
+        assert "Domicile" in result
+        assert "County" in result
+        assert "Unemp Rate" in result
+        assert "Alameda County" in result

@@ -38,6 +38,26 @@ LAUS_FIELD_LABELS: dict[str, str] = {
     "min_local_labor_force": "local labor force",
 }
 
+
+def _parse_exchange(value: str | None) -> str | list[str] | None:
+    """Accept a comma-separated string of exchanges; return the shape the SDK expects."""
+    if value is None:
+        return None
+    parts = [p.strip() for p in value.split(",") if p.strip()]
+    if not parts:
+        return None
+    if len(parts) == 1:
+        return parts[0]
+    return parts
+
+
+def _render_exchange(value: Any) -> str:
+    """Render an Exchange/Domicile enum member, plain string, or None as a cell."""
+    if value is None:
+        return "—"
+    return str(getattr(value, "value", value))
+
+
 VALID_SORT_FIELDS = {
     "gross_margin",
     "operating_margin",
@@ -81,6 +101,18 @@ def _build_summary_header(params: dict[str, Any]) -> str:
     sic = params.get("sic")
     if sic:
         parts.append(f"SIC {sic}")
+
+    exchange = params.get("exchange")
+    if exchange:
+        exchange_items = [p.strip() for p in exchange.split(",") if p.strip()]
+        if len(exchange_items) > 1:
+            parts.append(f"exchange in {', '.join(exchange_items)}")
+        elif exchange_items:
+            parts.append(f"exchange: {exchange_items[0]}")
+
+    domicile = params.get("domicile")
+    if domicile:
+        parts.append(f"domicile: {domicile}")
 
     filters: list[str] = []
     filter_map: list[tuple[str, str, str]] = [
@@ -288,7 +320,8 @@ BLS_FIELD_LABELS: dict[str, str] = {
     description=(
         "Find US public companies matching financial criteria. "
         "Combine filters: profitability (margins), growth rates, leverage ratios, "
-        "index membership, SIC code, and insider/institutional signals. "
+        "index membership, SIC code, stock exchange (nyse/nasdaq, comma-separated for multiple), "
+        "domicile (us/adr), and insider/institutional signals. "
         "Supports labor market filters: industry hiring trend, employment growth, "
         "wage growth, comp-to-market ratio, and HQ-county LAUS local unemployment "
         "(min/max local unemployment rate, local unemployment trend, min local labor force). "
@@ -314,6 +347,8 @@ async def screen_companies(
     min_interest_coverage: float | None = None,
     tier: str | None = None,
     sic: str | None = None,
+    exchange: str | None = None,
+    domicile: str | None = None,
     has_insider_buying: bool | None = None,
     has_institutional_increase: bool | None = None,
     min_industry_quits_rate: float | None = None,
@@ -362,6 +397,8 @@ async def screen_companies(
         "min_interest_coverage": min_interest_coverage,
         "tier": tier,
         "sic": sic,
+        "exchange": exchange,
+        "domicile": domicile,
         "has_insider_buying": has_insider_buying,
         "has_institutional_increase": has_institutional_increase,
         "min_industry_quits_rate": min_industry_quits_rate,
@@ -403,6 +440,8 @@ async def screen_companies(
             min_interest_coverage=min_interest_coverage,
             tier=tier,
             sic=sic,
+            exchange=_parse_exchange(exchange),
+            domicile=domicile,
             has_insider_buying=api_has_insider,
             has_institutional_increase=api_has_institutional,
             min_industry_quits_rate=min_industry_quits_rate,
@@ -442,8 +481,8 @@ async def screen_companies(
     bls_active = any(local_params.get(k) is not None for k in _BLS_FILTER_KEYS)
 
     # Build table
-    headers = ["#", "Ticker", "Company"]
-    alignments = ["r", "l", "l"]
+    headers = ["#", "Ticker", "Company", "Exchange", "Domicile"]
+    alignments = ["r", "l", "l", "l", "l"]
     for col in display_cols:
         headers.append(FIELD_LABELS.get(col, col).title())
         alignments.append("r")
@@ -469,7 +508,13 @@ async def screen_companies(
         # ScreenerResultItem uses extra="allow"
         tkr = getattr(company, "ticker", "")
         name = getattr(company, "name", "")
-        row = [str(i), tkr or "", name or ""]
+        row = [
+            str(i),
+            tkr or "",
+            name or "",
+            _render_exchange(getattr(company, "exchange", None)),
+            _render_exchange(getattr(company, "domicile", None)),
+        ]
         for col in display_cols:
             row.append(_get_column_value(company, col))
         if bls_active:

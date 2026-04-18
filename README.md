@@ -84,8 +84,8 @@ Get your API key at [portal.thesma.dev](https://portal.thesma.dev) (free tier: 2
 
 | Tool | Description |
 |------|-------------|
-| `search_companies` | Find US public companies by name or ticker symbol |
-| `get_company` | Get company details — CIK, SIC code, fiscal year end, index membership |
+| `search_companies` | Find US public companies by name, ticker, index tier, exchange, or domicile |
+| `get_company` | Get company details — CIK, SIC code, fiscal year end, index membership, exchange, domicile |
 
 ### Financial Statements
 
@@ -105,7 +105,7 @@ Get your API key at [portal.thesma.dev](https://portal.thesma.dev) (free tier: 2
 
 | Tool | Description |
 |------|-------------|
-| `screen_companies` | Find companies matching financial criteria — profitability, growth, leverage, insider/institutional signals |
+| `screen_companies` | Find companies matching financial criteria — profitability, growth, leverage, index tier, SIC, exchange, domicile, insider/institutional signals, labor market |
 
 ### Corporate Events
 
