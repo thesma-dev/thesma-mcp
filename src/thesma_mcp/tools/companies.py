@@ -15,6 +15,25 @@ def _get_ctx(ctx: Context[Any, AppContext, Any]) -> AppContext:
     return ctx.request_context.lifespan_context
 
 
+def _parse_exchange(value: str | None) -> str | list[str] | None:
+    """Accept a comma-separated string of exchanges; return the shape the SDK expects."""
+    if value is None:
+        return None
+    parts = [p.strip() for p in value.split(",") if p.strip()]
+    if not parts:
+        return None
+    if len(parts) == 1:
+        return parts[0]
+    return parts
+
+
+def _render_exchange(value: Any) -> str:
+    """Render an Exchange/Domicile enum member, plain string, or None as a cell."""
+    if value is None:
+        return "—"
+    return str(getattr(value, "value", value))
+
+
 @mcp.tool(
     description=(
         "Find US public companies by name or ticker symbol. "
@@ -25,15 +44,22 @@ async def search_companies(
     query: str,
     ctx: Context[Any, AppContext, Any],
     tier: str | None = None,
+    exchange: str | None = None,
+    domicile: str | None = None,
     limit: int = 20,
 ) -> str:
     """Search for companies by name, ticker, or sector."""
     client = get_client(ctx)
     limit = min(limit, 50)
+    exchange_value = _parse_exchange(exchange)
 
     # Try exact ticker match first
     try:
-        response = await client.companies.list(ticker=query.upper())  # type: ignore[misc]
+        response = await client.companies.list(  # type: ignore[misc]
+            ticker=query.upper(),
+            exchange=exchange_value,
+            domicile=domicile,
+        )
         if response.data:
             return _format_company_list(response.data, query)
     except ThesmaError:
@@ -41,7 +67,13 @@ async def search_companies(
 
     # Fall back to name search
     try:
-        response = await client.companies.list(search=query, tier=tier, per_page=limit)  # type: ignore[misc]
+        response = await client.companies.list(  # type: ignore[misc]
+            search=query,
+            tier=tier,
+            exchange=exchange_value,
+            domicile=domicile,
+            per_page=limit,
+        )
     except ThesmaError as e:
         return str(e)
 
@@ -56,14 +88,24 @@ def _format_company_list(companies: list[Any], query: str) -> str:
     count = len(companies)
     lines = [f'Found {count} company{"" if count == 1 else "ies"} matching "{query}"', ""]
 
-    headers = ["#", "Ticker", "CIK", "Company", "Index"]
+    headers = ["#", "Ticker", "CIK", "Company", "Index", "Exchange", "Domicile"]
     rows = []
     for i, c in enumerate(companies, 1):
         tier = str(c.company_tier.value) if hasattr(c.company_tier, "value") else str(c.company_tier or "")
         index_label = _tier_label(tier)
-        rows.append([str(i), c.ticker or "", c.cik, c.name, index_label])
+        rows.append(
+            [
+                str(i),
+                c.ticker or "",
+                c.cik,
+                c.name,
+                index_label,
+                _render_exchange(getattr(c, "exchange", None)),
+                _render_exchange(getattr(c, "domicile", None)),
+            ]
+        )
 
-    table = format_table(headers, rows, alignments=["r", "l", "l", "l", "l"])
+    table = format_table(headers, rows, alignments=["r", "l", "l", "l", "l", "l", "l"])
     lines.append(table)
     lines.append("")
     lines.append("Source: SEC EDGAR company registry.")
@@ -118,6 +160,8 @@ async def get_company(ticker: str, ctx: Context[Any, AppContext, Any]) -> str:
         f"{'Ticker:':<18}{tkr}",
         f"{'SIC Code:':<18}{sic_line}",
         f"{'Index:':<18}{_tier_label(tier)}",
+        f"{'Exchange:':<18}{_render_exchange(getattr(data, 'exchange', None))}",
+        f"{'Domicile:':<18}{_render_exchange(getattr(data, 'domicile', None))}",
         f"{'Fiscal Year End:':<18}{fiscal_year_end}",
         "",
         "Source: SEC EDGAR company registry.",
