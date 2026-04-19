@@ -114,6 +114,10 @@ def _build_summary_header(params: dict[str, Any]) -> str:
     if domicile:
         parts.append(f"domicile: {domicile}")
 
+    search = params.get("search")
+    if search:
+        parts.append(f'search: "{search}"')
+
     filters: list[str] = []
     filter_map: list[tuple[str, str, str]] = [
         ("min_revenue", "revenue", ">="),
@@ -391,7 +395,12 @@ def _get_lending_context(lc: Any) -> dict[str, Any] | None:
         "an SBA lending context summary on each row. "
         "Sort by any ratio: gross_margin, operating_margin, net_margin, return_on_equity, "
         "return_on_assets, debt_to_equity, current_ratio, interest_coverage, "
-        "revenue_growth_yoy, net_income_growth_yoy, eps_growth_yoy."
+        "revenue_growth_yoy, net_income_growth_yoy, eps_growth_yoy. "
+        "Use search='<term>' to filter by name substring or ticker prefix (case-insensitive; "
+        "server trims/escapes/skips nulls; does not normalise 'BRK.B' vs 'BRK-B' and does not "
+        "consult ticker aliases; omit search rather than passing an empty string, which the server "
+        "treats as a no-op; any match lacking a qualifying annual CompanyRatio row is silently "
+        "excluded by the screener inner-join)."
     )
 )
 async def screen_companies(
@@ -413,6 +422,7 @@ async def screen_companies(
     sic: str | None = None,
     exchange: str | None = None,
     domicile: str | None = None,
+    search: str | None = None,
     has_insider_buying: bool | None = None,
     has_institutional_increase: bool | None = None,
     min_industry_quits_rate: float | None = None,
@@ -470,6 +480,7 @@ async def screen_companies(
         "sic": sic,
         "exchange": exchange,
         "domicile": domicile,
+        "search": search,
         "has_insider_buying": has_insider_buying,
         "has_institutional_increase": has_institutional_increase,
         "min_industry_quits_rate": min_industry_quits_rate,
@@ -520,6 +531,7 @@ async def screen_companies(
             sic=sic,
             exchange=_parse_exchange(exchange),
             domicile=domicile,
+            search=search,
             has_insider_buying=api_has_insider,
             has_institutional_increase=api_has_institutional,
             min_industry_quits_rate=min_industry_quits_rate,
