@@ -183,6 +183,23 @@ def _build_summary_header(params: dict[str, Any]) -> str:
     if trend_val is not None:
         filters.append(f"local unemployment trend: {trend_val}")
 
+    # SBA filters
+    sba_filter_map: list[tuple[str, str, str]] = [
+        ("min_local_sba_loan_count", "local SBA loan count", ">="),
+        ("max_local_sba_loan_count", "local SBA loan count", "<="),
+        ("min_local_sba_lending_growth", "local SBA lending growth", ">="),
+        ("max_local_sba_lending_growth", "local SBA lending growth", "<="),
+        ("min_industry_sba_lending_growth", "industry SBA lending growth", ">="),
+        ("max_industry_sba_charge_off_rate", "industry SBA charge-off rate", "<="),
+    ]
+    for param_name, label, op in sba_filter_map:
+        val = params.get(param_name)
+        if val is not None:
+            if "growth" in label or "charge-off" in label or "rate" in label:
+                filters.append(f"{label} {op} {val}%")
+            else:
+                filters.append(f"{label} {op} {val}")
+
     prefix = " ".join(parts) + " companies" if parts else "Companies"
     if filters:
         return f"{prefix} with {' and '.join(filters)}"
@@ -315,6 +332,48 @@ BLS_FIELD_LABELS: dict[str, str] = {
     "min_comp_to_market_ratio": "comp-to-market ratio",
 }
 
+_SBA_FILTER_KEYS = {
+    "min_local_sba_loan_count",
+    "max_local_sba_loan_count",
+    "min_local_sba_lending_growth",
+    "max_local_sba_lending_growth",
+    "min_industry_sba_lending_growth",
+    "max_industry_sba_charge_off_rate",
+}
+
+SBA_FIELD_LABELS: dict[str, str] = {
+    "min_local_sba_loan_count": "local SBA loan count",
+    "max_local_sba_loan_count": "local SBA loan count",
+    "min_local_sba_lending_growth": "local SBA lending growth",
+    "max_local_sba_lending_growth": "local SBA lending growth",
+    "min_industry_sba_lending_growth": "industry SBA lending growth",
+    "max_industry_sba_charge_off_rate": "industry SBA charge-off rate",
+}
+
+
+def _get_lending_context(lc: Any) -> dict[str, Any] | None:
+    """Extract the LendingContextSummary fields as a dict.
+
+    ScreenerResultItem.lending_context is either a typed LendingContextSummary
+    Pydantic model or a plain dict (extra="allow" passthrough). This helper
+    normalises both shapes and returns None when the field is absent.
+    """
+    if lc is None:
+        return None
+    if isinstance(lc, dict):
+        return {
+            "local_sba_loan_count_4q": lc.get("local_sba_loan_count_4q"),
+            "local_sba_lending_growth_yoy": lc.get("local_sba_lending_growth_yoy"),
+            "industry_sba_lending_growth_yoy": lc.get("industry_sba_lending_growth_yoy"),
+            "industry_sba_charge_off_rate": lc.get("industry_sba_charge_off_rate"),
+        }
+    return {
+        "local_sba_loan_count_4q": getattr(lc, "local_sba_loan_count_4q", None),
+        "local_sba_lending_growth_yoy": getattr(lc, "local_sba_lending_growth_yoy", None),
+        "industry_sba_lending_growth_yoy": getattr(lc, "industry_sba_lending_growth_yoy", None),
+        "industry_sba_charge_off_rate": getattr(lc, "industry_sba_charge_off_rate", None),
+    }
+
 
 @mcp.tool(
     description=(
@@ -325,6 +384,11 @@ BLS_FIELD_LABELS: dict[str, str] = {
         "Supports labor market filters: industry hiring trend, employment growth, "
         "wage growth, comp-to-market ratio, and HQ-county LAUS local unemployment "
         "(min/max local unemployment rate, local unemployment trend, min local labor force). "
+        "Supports SBA 7(a) lending filters: local loan count (trailing 4Q in HQ county), "
+        "local lending growth (YoY %), industry lending growth (NAICS national YoY %), "
+        "and industry charge-off rate (%). "
+        "Set include='lending_context' or include='labor_context,lending_context' to surface "
+        "an SBA lending context summary on each row. "
         "Sort by any ratio: gross_margin, operating_margin, net_margin, return_on_equity, "
         "return_on_assets, debt_to_equity, current_ratio, interest_coverage, "
         "revenue_growth_yoy, net_income_growth_yoy, eps_growth_yoy."
@@ -359,6 +423,13 @@ async def screen_companies(
     max_local_unemployment_rate: float | None = None,
     local_unemployment_trend: str | None = None,
     min_local_labor_force: int | None = None,
+    min_local_sba_loan_count: int | None = None,
+    max_local_sba_loan_count: int | None = None,
+    min_local_sba_lending_growth: float | None = None,
+    max_local_sba_lending_growth: float | None = None,
+    min_industry_sba_lending_growth: float | None = None,
+    max_industry_sba_charge_off_rate: float | None = None,
+    include: str | None = None,
     sort: str | None = None,
     order: str | None = None,
     limit: int = 20,
@@ -409,6 +480,13 @@ async def screen_companies(
         "max_local_unemployment_rate": max_local_unemployment_rate,
         "local_unemployment_trend": local_unemployment_trend,
         "min_local_labor_force": min_local_labor_force,
+        "min_local_sba_loan_count": min_local_sba_loan_count,
+        "max_local_sba_loan_count": max_local_sba_loan_count,
+        "min_local_sba_lending_growth": min_local_sba_lending_growth,
+        "max_local_sba_lending_growth": max_local_sba_lending_growth,
+        "min_industry_sba_lending_growth": min_industry_sba_lending_growth,
+        "max_industry_sba_charge_off_rate": max_industry_sba_charge_off_rate,
+        "include": include,
         "sort": sort,
         "order": order,
         "industry_hiring_trend": industry_hiring_trend,
@@ -452,6 +530,13 @@ async def screen_companies(
             max_local_unemployment_rate=max_local_unemployment_rate,
             local_unemployment_trend=local_unemployment_trend,
             min_local_labor_force=min_local_labor_force,
+            min_local_sba_loan_count=min_local_sba_loan_count,
+            max_local_sba_loan_count=max_local_sba_loan_count,
+            min_local_sba_lending_growth=min_local_sba_lending_growth,
+            max_local_sba_lending_growth=max_local_sba_lending_growth,
+            min_industry_sba_lending_growth=min_industry_sba_lending_growth,
+            max_industry_sba_charge_off_rate=max_industry_sba_charge_off_rate,
+            include=include,
             sort_by=sort,
             order=order,
             industry_hiring_trend=industry_hiring_trend,
@@ -503,6 +588,14 @@ async def screen_companies(
         headers.extend(["County", "Unemp Rate", "Labor Force"])
         alignments.extend(["l", "r", "r"])
 
+    # Detect SBA activation: any SBA filter or include="...lending_context..."
+    has_sba_filter = any(local_params.get(k) is not None for k in _SBA_FILTER_KEYS)
+    wants_lending_context = include is not None and "lending_context" in include
+    sba_active = has_sba_filter or wants_lending_context
+    if sba_active:
+        headers.extend(["Local Loans (4Q)", "Local Growth", "Industry Growth", "Industry Charge-off"])
+        alignments.extend(["r", "r", "r", "r"])
+
     rows: list[list[str]] = []
     for i, company in enumerate(data, 1):
         # ScreenerResultItem uses extra="allow"
@@ -551,6 +644,16 @@ async def screen_companies(
                 row.append(str(county_name))
                 row.append(f"{ur:.1f}%" if ur is not None else "N/A")
                 row.append(format_number(lf, decimals=0) if lf is not None else "N/A")
+        if sba_active:
+            lc = _get_lending_context(getattr(company, "lending_context", None))
+            if lc is None:
+                row.extend(["N/A", "N/A", "N/A", "N/A"])
+            else:
+                loans_4q = lc.get("local_sba_loan_count_4q")
+                row.append(format_number(loans_4q, decimals=0) if loans_4q is not None else "N/A")
+                row.append(format_percent(lc.get("local_sba_lending_growth_yoy")))
+                row.append(format_percent(lc.get("industry_sba_lending_growth_yoy")))
+                row.append(format_percent(lc.get("industry_sba_charge_off_rate")))
         rows.append(row)
 
     table = format_table(headers, rows, alignments)
@@ -570,6 +673,16 @@ async def screen_companies(
         order_label = "ascending" if order == "asc" else "descending"
         sort_label = FIELD_LABELS.get(sort, sort)
         footer_parts[-1] = footer_parts[-1].rstrip(".") + f" sorted by {sort_label} ({order_label})."
+    if sba_active and data:
+        first_df = getattr(data[0], "data_freshness", None)
+        sba_period: str | None = None
+        if first_df is not None:
+            if isinstance(first_df, dict):
+                sba_period = first_df.get("sba_period")
+            else:
+                sba_period = getattr(first_df, "sba_period", None)
+        if sba_period:
+            footer_parts.append(f"SBA data as of {sba_period}.")
     footer_parts.append("Source: SEC EDGAR, latest annual filings. Ratios derived from reported financials.")
 
     return f"{header_line}\n\n{table}\n\n" + "\n".join(footer_parts)

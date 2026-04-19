@@ -226,6 +226,7 @@ def _register_tools() -> None:
     import thesma_mcp.tools.holdings as _holdings_tools  # noqa: F401
     import thesma_mcp.tools.insider_trades as _insider_trades_tools  # noqa: F401
     import thesma_mcp.tools.ratios as _ratios_tools  # noqa: F401
+    import thesma_mcp.tools.sba as _sba_tools  # noqa: F401
     import thesma_mcp.tools.screener as _screener_tools  # noqa: F401
 
 

@@ -136,7 +136,7 @@ async def get_company(ticker: str, ctx: Context[Any, AppContext, Any]) -> str:
         return str(e)
 
     try:
-        result = await client.companies.get(cik, include="labor_context")  # type: ignore[misc]
+        result = await client.companies.get(cik, include="labor_context,lending_context")  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
@@ -178,6 +178,18 @@ async def get_company(ticker: str, ctx: Context[Any, AppContext, Any]) -> str:
             lines.append(_format_labor_context(labor_ctx))
         else:
             lines.append(_format_labor_context_model(labor_ctx))
+
+    lending_ctx = getattr(data, "lending_context", None)
+    if lending_ctx is None and hasattr(data, "model_extra"):
+        model_extra = data.model_extra or {}
+        lending_ctx = model_extra.get("lending_context")
+    # Treat empty dict {} identically to omitted key.
+    if lending_ctx and (not isinstance(lending_ctx, dict) or len(lending_ctx) > 0):
+        lines.append("")
+        if isinstance(lending_ctx, dict):
+            lines.append(_format_lending_context(lending_ctx))
+        else:
+            lines.append(_format_lending_context_model(lending_ctx))
 
     return "\n".join(lines)
 
@@ -342,5 +354,183 @@ def _format_labor_context(labor_ctx: dict[str, Any]) -> str:
         ratio = comp.get("comp_to_market_ratio")
         if ratio is not None:
             sections.append(f"- Company CEO Comp-to-Market: {ratio:.1f}x")
+
+    return "\n".join(sections)
+
+
+def _yoy_signed(value: float | None) -> str:
+    """Render a signed YoY percentage using the existing arrow indicator, or '—' if None."""
+    if value is None:
+        return "\u2014"
+    return _yoy_indicator(value) or "0.0%"
+
+
+def _format_lending_context_model(lending_ctx: Any) -> str:
+    """Format the lending market context from a LendingContext Pydantic model."""
+    sections: list[str] = ["## Lending Market Context"]
+
+    local = getattr(lending_ctx, "local_market", None)
+    industry = getattr(lending_ctx, "industry_lending", None)
+
+    if local is None and industry is None:
+        sections.append("")
+        sections.append("_(no lending context available — county FIPS may be unmapped or no SBA data exists)_")
+        return "\n".join(sections)
+
+    if local is not None:
+        county_name = getattr(local, "county_name", None) or "county unknown"
+        county_fips = getattr(local, "county_fips", None) or "\u2014"
+        sections.append("")
+        sections.append(f"**Local Market ({county_name}, FIPS {county_fips})**")
+
+        loan_count = getattr(local, "quarterly_loan_count", None)
+        if loan_count is not None:
+            sections.append(f"- Quarterly Loan Count: {format_number(loan_count, decimals=0)}")
+
+        total_amount = getattr(local, "quarterly_total_amount", None)
+        if total_amount is not None:
+            sections.append(f"- Quarterly Total Amount: {format_currency(total_amount, decimals=0)}")
+
+        avg_size = getattr(local, "avg_loan_size", None)
+        if avg_size is not None:
+            sections.append(f"- Avg Loan Size: {format_currency(avg_size, decimals=0)}")
+
+        yoy = getattr(local, "quarterly_yoy_change_pct", None)
+        sections.append(f"- YoY Change: {_yoy_signed(yoy)}")
+
+        charge_off = getattr(local, "charge_off_rate_trailing_4q", None)
+        if charge_off is not None:
+            sections.append(f"- Charge-off Rate (trailing 4Q): {charge_off:.2f}%")
+
+        top_naics = getattr(local, "top_industry_naics", None)
+        top_name = getattr(local, "top_industry_name", None)
+        if top_naics or top_name:
+            sections.append(f"- Top Industry: NAICS {top_naics or '—'} — {top_name or '—'}")
+
+        period = getattr(local, "data_period", None)
+        if period:
+            sections.append(f"- Data Period: {period}")
+
+        # _render_exchange is a misnomer — body works for any enum/string/None.
+        confidence = _render_exchange(getattr(local, "county_fips_confidence", None))
+        sections.append(f"- Match Confidence: {confidence}")
+
+    if industry is not None:
+        naics = getattr(industry, "naics_code", "") or ""
+        desc = getattr(industry, "naics_description", "") or ""
+        sections.append("")
+        sections.append(f"**Industry Lending (NAICS {naics} — {desc})**")
+
+        match_level = getattr(industry, "naics_match_level", None)
+        if match_level:
+            sections.append(f"- Match Level: {match_level}")
+
+        nat_count = getattr(industry, "national_quarterly_loan_count", None)
+        if nat_count is not None:
+            sections.append(f"- National Quarterly Loan Count: {format_number(nat_count, decimals=0)}")
+
+        nat_amount = getattr(industry, "national_quarterly_total_amount", None)
+        if nat_amount is not None:
+            sections.append(f"- National Quarterly Total Amount: {format_currency(nat_amount, decimals=0)}")
+
+        nat_avg = getattr(industry, "national_avg_loan_size", None)
+        if nat_avg is not None:
+            sections.append(f"- National Avg Loan Size: {format_currency(nat_avg, decimals=0)}")
+
+        nat_yoy = getattr(industry, "national_yoy_change_pct", None)
+        sections.append(f"- National YoY Change: {_yoy_signed(nat_yoy)}")
+
+        nat_charge_off = getattr(industry, "national_charge_off_rate_trailing_4q", None)
+        if nat_charge_off is not None:
+            sections.append(f"- National Charge-off Rate (trailing 4Q): {nat_charge_off:.2f}%")
+
+        period = getattr(industry, "data_period", None)
+        if period:
+            sections.append(f"- Data Period: {period}")
+
+    return "\n".join(sections)
+
+
+def _format_lending_context(lending_ctx: dict[str, Any]) -> str:
+    """Format the lending market context from a dict (extra='allow' passthrough)."""
+    sections: list[str] = ["## Lending Market Context"]
+
+    local = lending_ctx.get("local_market")
+    industry = lending_ctx.get("industry_lending")
+
+    if not local and not industry:
+        sections.append("")
+        sections.append("_(no lending context available — county FIPS may be unmapped or no SBA data exists)_")
+        return "\n".join(sections)
+
+    if local:
+        county_name = local.get("county_name") or "county unknown"
+        county_fips = local.get("county_fips") or "\u2014"
+        sections.append("")
+        sections.append(f"**Local Market ({county_name}, FIPS {county_fips})**")
+
+        loan_count = local.get("quarterly_loan_count")
+        if loan_count is not None:
+            sections.append(f"- Quarterly Loan Count: {format_number(loan_count, decimals=0)}")
+
+        total_amount = local.get("quarterly_total_amount")
+        if total_amount is not None:
+            sections.append(f"- Quarterly Total Amount: {format_currency(total_amount, decimals=0)}")
+
+        avg_size = local.get("avg_loan_size")
+        if avg_size is not None:
+            sections.append(f"- Avg Loan Size: {format_currency(avg_size, decimals=0)}")
+
+        yoy = local.get("quarterly_yoy_change_pct")
+        sections.append(f"- YoY Change: {_yoy_signed(yoy)}")
+
+        charge_off = local.get("charge_off_rate_trailing_4q")
+        if charge_off is not None:
+            sections.append(f"- Charge-off Rate (trailing 4Q): {charge_off:.2f}%")
+
+        top_naics = local.get("top_industry_naics")
+        top_name = local.get("top_industry_name")
+        if top_naics or top_name:
+            sections.append(f"- Top Industry: NAICS {top_naics or '—'} — {top_name or '—'}")
+
+        period = local.get("data_period")
+        if period:
+            sections.append(f"- Data Period: {period}")
+
+        confidence = local.get("county_fips_confidence") or "\u2014"
+        sections.append(f"- Match Confidence: {confidence}")
+
+    if industry:
+        naics = industry.get("naics_code", "") or ""
+        desc = industry.get("naics_description", "") or ""
+        sections.append("")
+        sections.append(f"**Industry Lending (NAICS {naics} — {desc})**")
+
+        match_level = industry.get("naics_match_level")
+        if match_level:
+            sections.append(f"- Match Level: {match_level}")
+
+        nat_count = industry.get("national_quarterly_loan_count")
+        if nat_count is not None:
+            sections.append(f"- National Quarterly Loan Count: {format_number(nat_count, decimals=0)}")
+
+        nat_amount = industry.get("national_quarterly_total_amount")
+        if nat_amount is not None:
+            sections.append(f"- National Quarterly Total Amount: {format_currency(nat_amount, decimals=0)}")
+
+        nat_avg = industry.get("national_avg_loan_size")
+        if nat_avg is not None:
+            sections.append(f"- National Avg Loan Size: {format_currency(nat_avg, decimals=0)}")
+
+        nat_yoy = industry.get("national_yoy_change_pct")
+        sections.append(f"- National YoY Change: {_yoy_signed(nat_yoy)}")
+
+        nat_charge_off = industry.get("national_charge_off_rate_trailing_4q")
+        if nat_charge_off is not None:
+            sections.append(f"- National Charge-off Rate (trailing 4Q): {nat_charge_off:.2f}%")
+
+        period = industry.get("data_period")
+        if period:
+            sections.append(f"- Data Period: {period}")
 
     return "\n".join(sections)

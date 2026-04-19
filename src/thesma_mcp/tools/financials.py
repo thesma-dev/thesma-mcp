@@ -120,6 +120,9 @@ async def get_financials(
         return str(e)
 
     try:
+        # NOTE: include="lending_context"/"labor_context" is accepted by the SDK but the
+        # enrichment fields are dropped by FinancialStatementResponse.extra="ignore".
+        # Exposing these is a follow-up pending SDK-side envelope hoisting.
         result = await client.financials.get(cik, statement=statement, period=period, year=year, quarter=quarter)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)

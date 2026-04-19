@@ -466,3 +466,233 @@ class TestRenderExchangeHelper:
         from thesma._generated.models import Exchange
 
         assert _render_exchange(Exchange.NYSE) == "NYSE"
+
+
+# ---------------------------------------------------------------------------
+# Lending context tests (MCP-21)
+# ---------------------------------------------------------------------------
+
+
+def _make_lending_response(
+    *,
+    labor_context: Any = "omit",
+    lending_context: Any = "omit",
+) -> Any:
+    """Build a get_company response with optional labor/lending context."""
+    from types import SimpleNamespace
+
+    base = {
+        "name": "Apple Inc.",
+        "cik": "0000320193",
+        "ticker": "AAPL",
+        "sic_code": "3571",
+        "sic_description": "Electronic Computers",
+        "fiscal_year_end": "0930",
+        "exchange": "NASDAQ",
+        "domicile": "us",
+    }
+    tier_mock = MagicMock()
+    tier_mock.value = "sp500"
+    base["company_tier"] = tier_mock
+
+    if labor_context != "omit":
+        base["labor_context"] = labor_context
+    else:
+        base["labor_context"] = None
+    if lending_context != "omit":
+        base["lending_context"] = lending_context
+    base.setdefault("model_extra", {})
+    return SimpleNamespace(data=SimpleNamespace(**base))
+
+
+def _populated_local_market_dict() -> dict[str, Any]:
+    return {
+        "county_fips": "06085",
+        "county_name": "Santa Clara County",
+        "county_fips_confidence": "high",
+        "quarterly_loan_count": 312,
+        "quarterly_total_amount": 64_000_000,
+        "avg_loan_size": 205_000,
+        "quarterly_yoy_change_pct": 7.1,
+        "charge_off_rate_trailing_4q": 1.4,
+        "top_industry_naics": "722511",
+        "top_industry_name": "Restaurants",
+        "data_period": "2025-Q3",
+        "source": "SBA",
+    }
+
+
+def _populated_industry_lending_dict() -> dict[str, Any]:
+    return {
+        "naics_code": "3571",
+        "naics_description": "Electronic Computers",
+        "naics_match_level": "6-digit",
+        "national_quarterly_loan_count": 1240,
+        "national_quarterly_total_amount": 320_000_000,
+        "national_avg_loan_size": 258_000,
+        "national_yoy_change_pct": 5.4,
+        "national_charge_off_rate_trailing_4q": 1.7,
+        "data_period": "2025-Q3",
+        "source": "SBA",
+    }
+
+
+class TestGetCompanyLendingContext:
+    async def test_get_company_with_populated_lending_context(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        app.client.companies.get = AsyncMock(
+            return_value=_make_lending_response(
+                lending_context={
+                    "local_market": _populated_local_market_dict(),
+                    "industry_lending": _populated_industry_lending_dict(),
+                }
+            )
+        )
+        result = await get_company("AAPL", mock_ctx)
+        assert "## Lending Market Context" in result
+        assert "**Local Market" in result
+        assert "**Industry Lending" in result
+        assert "06085" in result
+        assert "3571" in result
+
+    async def test_get_company_with_null_children(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        app.client.companies.get = AsyncMock(
+            return_value=_make_lending_response(lending_context={"local_market": None, "industry_lending": None})
+        )
+        result = await get_company("AAPL", mock_ctx)
+        assert "## Lending Market Context" in result
+        assert "no lending context available" in result
+        assert "**Local Market" not in result
+        assert "**Industry Lending" not in result
+
+    async def test_get_company_with_partial_local_only(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        app.client.companies.get = AsyncMock(
+            return_value=_make_lending_response(
+                lending_context={"local_market": _populated_local_market_dict(), "industry_lending": None}
+            )
+        )
+        result = await get_company("AAPL", mock_ctx)
+        assert "**Local Market" in result
+        assert "**Industry Lending" not in result
+
+    async def test_get_company_omitted_lending_context_key(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        app.client.companies.get = AsyncMock(return_value=_make_lending_response())  # both omitted
+        result = await get_company("AAPL", mock_ctx)
+        assert "## Lending Market Context" not in result
+
+    async def test_get_company_empty_dict_lending_context(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        app.client.companies.get = AsyncMock(return_value=_make_lending_response(lending_context={}))
+        result = await get_company("AAPL", mock_ctx)
+        assert "## Lending Market Context" not in result
+
+    async def test_get_company_null_county_fips_with_confidence_unknown(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        local = _populated_local_market_dict()
+        local["county_fips"] = None
+        local["county_name"] = None
+        local["county_fips_confidence"] = "unknown"
+        app.client.companies.get = AsyncMock(
+            return_value=_make_lending_response(lending_context={"local_market": local, "industry_lending": None})
+        )
+        result = await get_company("AAPL", mock_ctx)
+        assert "**Local Market (county unknown, FIPS \u2014)**" in result
+        assert "Match Confidence: unknown" in result
+
+    async def test_get_company_county_fips_confidence_unknown(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        local = _populated_local_market_dict()
+        local["county_fips_confidence"] = "unknown"
+        app.client.companies.get = AsyncMock(
+            return_value=_make_lending_response(lending_context={"local_market": local, "industry_lending": None})
+        )
+        result = await get_company("AAPL", mock_ctx)
+        assert "Match Confidence: unknown" in result
+
+    async def test_get_company_labor_and_lending_both_present(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        app.client.companies.get = AsyncMock(
+            return_value=_make_lending_response(
+                labor_context={
+                    "industry": {"naics_code": "3571", "naics_description": "Electronic Computers"},
+                },
+                lending_context={"local_market": _populated_local_market_dict(), "industry_lending": None},
+            )
+        )
+        result = await get_company("AAPL", mock_ctx)
+        assert "## Labor Market Context" in result
+        assert "## Lending Market Context" in result
+
+    async def test_get_company_labor_present_lending_absent(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        app.client.companies.get = AsyncMock(
+            return_value=_make_lending_response(
+                labor_context={
+                    "industry": {"naics_code": "3571", "naics_description": "Electronic Computers"},
+                },
+            )
+        )
+        result = await get_company("AAPL", mock_ctx)
+        assert "## Labor Market Context" in result
+        assert "## Lending Market Context" not in result
+
+    async def test_get_company_lending_present_labor_absent(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        app.client.companies.get = AsyncMock(
+            return_value=_make_lending_response(
+                lending_context={"local_market": _populated_local_market_dict(), "industry_lending": None}
+            )
+        )
+        result = await get_company("AAPL", mock_ctx)
+        assert "## Lending Market Context" in result
+        assert "## Labor Market Context" not in result
+
+    async def test_get_company_labor_context_output_format_unchanged(self, mock_ctx: MagicMock) -> None:
+        """Regression: labor section markup is unchanged after include= expansion."""
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        app.client.companies.get = AsyncMock(
+            return_value=_make_lending_response(
+                labor_context={
+                    "industry": {
+                        "naics_code": "3571",
+                        "naics_description": "Electronic Computers",
+                        "total_employment_thousands": 220.5,
+                        "employment_yoy_pct": 2.4,
+                    },
+                    "local_market": {"county_name": "Santa Clara County"},
+                    "compensation_benchmark": {
+                        "soc_code": "11-1011",
+                        "soc_title": "Chief Executives",
+                        "market_median_annual_wage": 250_000,
+                        "comp_to_market_ratio": 5.0,
+                    },
+                },
+            )
+        )
+        result = await get_company("AAPL", mock_ctx)
+        assert "**Industry (NAICS 3571" in result
+        assert "**Local Market (Santa Clara County)**" in result
+        assert "**CEO Compensation Benchmark**" in result
+
+    async def test_get_company_forwards_include_both(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        get_mock = AsyncMock(return_value=_make_lending_response())
+        app.client.companies.get = get_mock
+        await get_company("AAPL", mock_ctx)
+        kwargs = get_mock.await_args.kwargs
+        assert kwargs.get("include") == "labor_context,lending_context"
