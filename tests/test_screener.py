@@ -448,3 +448,313 @@ class TestScreenerExchangeDomicileFilters:
         assert "County" in result
         assert "Unemp Rate" in result
         assert "Alameda County" in result
+
+
+# ---------------------------------------------------------------------------
+# SBA filter / lending_context tests (MCP-21)
+# ---------------------------------------------------------------------------
+
+
+def _sba_lending_dict(**overrides: Any) -> dict[str, Any]:
+    base = {
+        "local_sba_loan_count_4q": 520,
+        "local_sba_lending_growth_yoy": 8.4,
+        "industry_sba_lending_growth_yoy": 6.1,
+        "industry_sba_charge_off_rate": 1.9,
+    }
+    base.update(overrides)
+    return base
+
+
+def _make_sba_item(
+    *,
+    lending_context: Any = "default",
+    data_freshness: Any = None,
+    ratios: dict[str, float | None] | None = None,
+) -> SimpleNamespace:
+    """A ScreenerResultItem-shaped namespace with optional SBA enrichment."""
+    ratios_data = ratios or {"gross_margin": 45.6}
+    item = SimpleNamespace(
+        cik="0000320193",
+        ticker="AAPL",
+        name="Apple Inc.",
+        ratios=SimpleNamespace(**ratios_data),
+        bls=None,
+        labor_context=None,
+        lending_context=_sba_lending_dict() if lending_context == "default" else lending_context,
+        data_freshness=data_freshness,
+    )
+    return item
+
+
+class TestScreenerSbaFilters:
+    @pytest.mark.asyncio
+    async def test_min_local_sba_loan_count_forwarded(self) -> None:
+        resp = _make_paginated_response([_make_sba_item()])
+        ctx = _make_ctx(resp)
+        await screen_companies(ctx, min_local_sba_loan_count=100)
+        kwargs = ctx.request_context.lifespan_context.client.screener.screen.await_args.kwargs
+        assert kwargs["min_local_sba_loan_count"] == 100
+
+    @pytest.mark.asyncio
+    async def test_max_local_sba_loan_count_forwarded(self) -> None:
+        resp = _make_paginated_response([_make_sba_item()])
+        ctx = _make_ctx(resp)
+        await screen_companies(ctx, max_local_sba_loan_count=1000)
+        kwargs = ctx.request_context.lifespan_context.client.screener.screen.await_args.kwargs
+        assert kwargs["max_local_sba_loan_count"] == 1000
+
+    @pytest.mark.asyncio
+    async def test_min_local_sba_lending_growth_forwarded(self) -> None:
+        resp = _make_paginated_response([_make_sba_item()])
+        ctx = _make_ctx(resp)
+        await screen_companies(ctx, min_local_sba_lending_growth=5.0)
+        kwargs = ctx.request_context.lifespan_context.client.screener.screen.await_args.kwargs
+        assert kwargs["min_local_sba_lending_growth"] == 5.0
+
+    @pytest.mark.asyncio
+    async def test_max_local_sba_lending_growth_forwarded(self) -> None:
+        resp = _make_paginated_response([_make_sba_item()])
+        ctx = _make_ctx(resp)
+        await screen_companies(ctx, max_local_sba_lending_growth=20.0)
+        kwargs = ctx.request_context.lifespan_context.client.screener.screen.await_args.kwargs
+        assert kwargs["max_local_sba_lending_growth"] == 20.0
+
+    @pytest.mark.asyncio
+    async def test_min_industry_sba_lending_growth_forwarded(self) -> None:
+        resp = _make_paginated_response([_make_sba_item()])
+        ctx = _make_ctx(resp)
+        await screen_companies(ctx, min_industry_sba_lending_growth=3.5)
+        kwargs = ctx.request_context.lifespan_context.client.screener.screen.await_args.kwargs
+        assert kwargs["min_industry_sba_lending_growth"] == 3.5
+
+    @pytest.mark.asyncio
+    async def test_max_industry_sba_charge_off_rate_forwarded(self) -> None:
+        resp = _make_paginated_response([_make_sba_item()])
+        ctx = _make_ctx(resp)
+        await screen_companies(ctx, max_industry_sba_charge_off_rate=10.0)
+        kwargs = ctx.request_context.lifespan_context.client.screener.screen.await_args.kwargs
+        assert kwargs["max_industry_sba_charge_off_rate"] == 10.0
+
+    @pytest.mark.asyncio
+    async def test_combined_sba_filters_forwarded(self) -> None:
+        resp = _make_paginated_response([_make_sba_item()])
+        ctx = _make_ctx(resp)
+        result = await screen_companies(
+            ctx,
+            min_local_sba_loan_count=100,
+            max_local_sba_loan_count=1000,
+            min_local_sba_lending_growth=5.0,
+            max_local_sba_lending_growth=20.0,
+            min_industry_sba_lending_growth=3.5,
+            max_industry_sba_charge_off_rate=10.0,
+        )
+        kwargs = ctx.request_context.lifespan_context.client.screener.screen.await_args.kwargs
+        assert kwargs["min_local_sba_loan_count"] == 100
+        assert kwargs["max_local_sba_loan_count"] == 1000
+        assert kwargs["min_local_sba_lending_growth"] == 5.0
+        assert kwargs["max_local_sba_lending_growth"] == 20.0
+        assert kwargs["min_industry_sba_lending_growth"] == 3.5
+        assert kwargs["max_industry_sba_charge_off_rate"] == 10.0
+        assert "local SBA loan count" in result
+        assert "local SBA lending growth" in result
+        assert "industry SBA lending growth" in result
+        assert "industry SBA charge-off rate" in result
+
+    @pytest.mark.asyncio
+    async def test_summary_header_includes_sba_filters(self) -> None:
+        resp = _make_paginated_response([_make_sba_item()])
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx, min_local_sba_loan_count=100, max_industry_sba_charge_off_rate=5.0)
+        assert "local SBA loan count >= 100" in result
+        assert "industry SBA charge-off rate <= 5.0%" in result
+
+    @pytest.mark.asyncio
+    async def test_sba_columns_render_when_sba_filter_active(self) -> None:
+        resp = _make_paginated_response([_make_sba_item()])
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx, min_local_sba_loan_count=100)
+        assert "Local Loans (4Q)" in result
+        assert "Local Growth" in result
+        assert "Industry Growth" in result
+        assert "Industry Charge-off" in result
+        assert "520" in result
+        assert "8.4%" in result
+        assert "6.1%" in result
+        assert "1.9%" in result
+
+    @pytest.mark.asyncio
+    async def test_sba_columns_render_when_include_lending_context(self) -> None:
+        resp = _make_paginated_response([_make_sba_item()])
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx, include="lending_context")
+        assert "Local Loans (4Q)" in result
+        assert "Industry Growth" in result
+
+    @pytest.mark.asyncio
+    async def test_sba_columns_render_when_include_combined(self) -> None:
+        resp = _make_paginated_response([_make_sba_item()])
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx, include="labor_context,lending_context")
+        assert "Local Loans (4Q)" in result
+
+    @pytest.mark.asyncio
+    async def test_sba_columns_absent_when_no_sba_filter_no_include(self) -> None:
+        resp = _make_paginated_response([_make_sba_item(lending_context=None)])
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx)
+        assert "Local Loans (4Q)" not in result
+        assert "Industry Charge-off" not in result
+
+    @pytest.mark.asyncio
+    async def test_sba_null_lending_context_renders_na(self) -> None:
+        resp = _make_paginated_response([_make_sba_item(lending_context=None)])
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx, min_local_sba_loan_count=100)
+        # Four N/A cells in the SBA block
+        assert "Local Loans (4Q)" in result
+        # Pull the data row substring (after the header separator "---")
+        assert result.count("N/A") >= 4
+
+    @pytest.mark.asyncio
+    async def test_sba_partial_lending_context_renders_mixed(self) -> None:
+        partial = {
+            "local_sba_loan_count_4q": 520,
+            "local_sba_lending_growth_yoy": None,
+            "industry_sba_lending_growth_yoy": 6.1,
+            "industry_sba_charge_off_rate": None,
+        }
+        resp = _make_paginated_response([_make_sba_item(lending_context=partial)])
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx, min_local_sba_loan_count=100)
+        assert "520" in result
+        assert "6.1%" in result
+        assert "N/A" in result
+
+    @pytest.mark.asyncio
+    async def test_sba_freshness_footer_line_present(self) -> None:
+        resp = _make_paginated_response([_make_sba_item(data_freshness={"sba_period": "2025-Q4"})])
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx, min_local_sba_loan_count=100)
+        assert "SBA data as of 2025-Q4" in result
+
+    @pytest.mark.asyncio
+    async def test_sba_freshness_footer_absent_when_no_sba_active(self) -> None:
+        resp = _make_paginated_response([_make_sba_item(data_freshness={"sba_period": "2025-Q4"})])
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx)
+        assert "SBA data as of" not in result
+
+    @pytest.mark.asyncio
+    async def test_include_param_forwarded(self) -> None:
+        resp = _make_paginated_response([_make_sba_item()])
+        ctx = _make_ctx(resp)
+        await screen_companies(ctx, include="lending_context")
+        kwargs = ctx.request_context.lifespan_context.client.screener.screen.await_args.kwargs
+        assert kwargs["include"] == "lending_context"
+
+    @pytest.mark.asyncio
+    async def test_include_combined_param_forwarded(self) -> None:
+        resp = _make_paginated_response([_make_sba_item()])
+        ctx = _make_ctx(resp)
+        await screen_companies(ctx, include="labor_context,lending_context")
+        kwargs = ctx.request_context.lifespan_context.client.screener.screen.await_args.kwargs
+        assert kwargs["include"] == "labor_context,lending_context"
+
+    @pytest.mark.asyncio
+    async def test_invalid_include_propagates_badrequest(self) -> None:
+        from thesma.errors import ThesmaError
+
+        resp = _make_paginated_response([_make_sba_item()])
+        ctx = _make_ctx(resp)
+        ctx.request_context.lifespan_context.client.screener.screen = AsyncMock(
+            side_effect=ThesmaError("Invalid include 'bogus'")
+        )
+        result = await screen_companies(ctx, include="bogus")
+        assert result == "Invalid include 'bogus'"
+
+    @pytest.mark.asyncio
+    async def test_lending_context_dict_shape_read(self) -> None:
+        # Already covered by default — lending_context defaults to dict shape
+        resp = _make_paginated_response([_make_sba_item()])
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx, min_local_sba_loan_count=100)
+        assert "520" in result
+
+    @pytest.mark.asyncio
+    async def test_lending_context_model_shape_read(self) -> None:
+        # Build a SimpleNamespace simulating a typed Pydantic LendingContextSummary
+        lc_model = SimpleNamespace(
+            local_sba_loan_count_4q=520,
+            local_sba_lending_growth_yoy=8.4,
+            industry_sba_lending_growth_yoy=6.1,
+            industry_sba_charge_off_rate=1.9,
+        )
+        resp = _make_paginated_response([_make_sba_item(lending_context=lc_model)])
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx, min_local_sba_loan_count=100)
+        assert "520" in result
+        assert "8.4%" in result
+
+    @pytest.mark.asyncio
+    async def test_include_lending_context_alone_renders_columns_without_labor_context(self) -> None:
+        item = _make_sba_item()
+        item.labor_context = None
+        resp = _make_paginated_response([item])
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx, include="lending_context")
+        assert "Local Loans (4Q)" in result
+        # No JOLTS / LAUS / BLS column headers should appear
+        assert "Quits Rate" not in result
+        assert "Hiring Trend" not in result
+        assert "Unemp Rate" not in result
+
+    @pytest.mark.asyncio
+    async def test_include_whitespace_and_duplicates_tolerated(self) -> None:
+        resp = _make_paginated_response([_make_sba_item()])
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx, include="labor_context, lending_context")
+        assert "Local Loans (4Q)" in result
+
+        resp2 = _make_paginated_response([_make_sba_item()])
+        ctx2 = _make_ctx(resp2)
+        result2 = await screen_companies(ctx2, include="lending_context,lending_context")
+        assert "Local Loans (4Q)" in result2
+        # Single column block (count of one of the unique header strings)
+        assert result2.count("Local Loans (4Q)") == 1
+
+
+class TestScreenerSbaRegression:
+    @pytest.mark.asyncio
+    async def test_laus_columns_still_render_when_sba_also_active(self) -> None:
+        item = _make_sba_item()
+        item.labor_context = {
+            "local_market": {
+                "county_name": "Santa Clara County",
+                "unemployment_rate": 3.8,
+                "labor_force": 1_080_000,
+            }
+        }
+        item.exchange = "NASDAQ"
+        item.domicile = "us"
+        resp = _make_paginated_response([item])
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx, min_local_unemployment_rate=2.0, min_local_sba_loan_count=100)
+        assert "County" in result
+        assert "Unemp Rate" in result
+        assert "Labor Force" in result
+        assert "Local Loans (4Q)" in result
+        assert "Industry Charge-off" in result
+
+    @pytest.mark.asyncio
+    async def test_bls_labor_context_data_freshness_still_nested(self) -> None:
+        item = _make_sba_item(data_freshness={"sba_period": "2025-Q4"})
+        item.labor_context = SimpleNamespace(
+            data_freshness=SimpleNamespace(ces_period="2025-11"),
+            local_market=None,
+        )
+        resp = _make_paginated_response([item])
+        ctx = _make_ctx(resp)
+        result = await screen_companies(ctx, include="labor_context,lending_context")
+        # SBA freshness footer present, no crash
+        assert "SBA data as of 2025-Q4" in result

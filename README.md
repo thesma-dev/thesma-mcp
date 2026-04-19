@@ -1,6 +1,6 @@
 # Thesma MCP Server
 
-Give your AI assistant access to SEC, Census, and BLS data.
+Give your AI assistant access to SEC, Census, BLS, and SBA data.
 
 [![PyPI version](https://img.shields.io/pypi/v/thesma-mcp)](https://pypi.org/project/thesma-mcp/)
 [![Python](https://img.shields.io/pypi/pyversions/thesma-mcp)](https://pypi.org/project/thesma-mcp/)
@@ -105,7 +105,7 @@ Get your API key at [portal.thesma.dev](https://portal.thesma.dev) (free tier: 2
 
 | Tool | Description |
 |------|-------------|
-| `screen_companies` | Find companies matching financial criteria — profitability, growth, leverage, index tier, SIC, exchange, domicile, insider/institutional signals, labor market |
+| `screen_companies` | Find companies matching financial criteria — profitability, growth, leverage, index tier, SIC, exchange, domicile, insider/institutional signals, labor market, SBA lending (county + industry) |
 
 ### Corporate Events
 
@@ -185,6 +185,20 @@ Get your API key at [portal.thesma.dev](https://portal.thesma.dev) (free tier: 2
 | `get_state_unemployment` | Get monthly state unemployment with labor force participation rate and employment-population ratio (SA or NSA) |
 | `compare_state_unemployment` | Compare unemployment metrics across up to 10 states in a single period |
 
+### SBA 7(a) Lending
+
+| Tool | Description |
+|------|-------------|
+| `get_county_lending` | Get quarterly SBA 7(a) loan aggregates for a US county (loan count, total amount, charge-off rate) |
+| `get_state_lending` | Get quarterly SBA 7(a) loan aggregates for a US state |
+| `get_industry_lending` | Get quarterly SBA 7(a) loan aggregates for a NAICS industry, optionally scoped to state or county |
+| `get_lenders` | List SBA 7(a) lenders ranked by loan count, total amount, or average loan size |
+| `get_lender` | Get details and quarterly history for a single SBA lender by lender_id |
+| `get_lending_characteristics` | Get loan size, term length, interest rate, sub-programme, and business-type distributions for a quarter |
+| `get_lending_outcomes` | Get vintage cohort charge-off rates and maturity status |
+| `explore_sba_metrics` | Browse available SBA metrics by category or keyword |
+| `get_sba_metric_detail` | Get full definition, unit, cadence, and data availability for a single SBA metric |
+
 ### BLS Discovery
 
 | Tool | Description |
@@ -203,7 +217,8 @@ Get your API key at [portal.thesma.dev](https://portal.thesma.dev) (free tier: 2
 - ~3,000 US public companies — about 98% of the investable US equity market by market cap
 - **SEC EDGAR:** financial statements (2009-present), insider trades, institutional holdings, executive compensation, board data, corporate events, filings
 - **Bureau of Labor Statistics:** industry employment (CES), county wages (QCEW), occupation wages (OEWS), job openings and turnover (JOLTS), local unemployment (LAUS)
-- **Labor market enrichment:** `get_company` automatically includes BLS labor context; `screen_companies` supports labor market filters
+- **Small Business Administration:** 7(a) loan program data — quarterly lending aggregates by county/state/industry, lender rankings, loan characteristics (size, term, rate, sub-programme), vintage cohort charge-off outcomes
+- **Labor & lending market enrichment:** `get_company` automatically includes BLS labor context and SBA 7(a) lending context; `screen_companies` supports labor market and SBA lending filters
 - All data sourced from US federal public-domain sources: SEC EDGAR, US Census Bureau, Bureau of Labor Statistics
 
 ## Links

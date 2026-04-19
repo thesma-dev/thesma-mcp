@@ -202,3 +202,13 @@ class TestHealthEndpoint:
 
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
+
+
+class TestToolRegistration:
+    def test_sba_module_registered(self) -> None:
+        """_register_tools() imports thesma_mcp.tools.sba — catches missing import line."""
+        import sys
+
+        import thesma_mcp.server  # noqa: F401
+
+        assert "thesma_mcp.tools.sba" in sys.modules
