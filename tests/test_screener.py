@@ -135,6 +135,22 @@ def test_summary_header_multiple_filters() -> None:
     assert "net margin >= 20%" in header
 
 
+@pytest.mark.asyncio
+async def test_screen_companies_passes_search() -> None:
+    """search kwarg is forwarded to the underlying SDK screener call."""
+    resp = _make_paginated_response(_default_companies())
+    ctx = _make_ctx(resp)
+    await screen_companies(ctx, search="AAPL")
+    kwargs = ctx.request_context.lifespan_context.client.screener.screen.call_args.kwargs
+    assert kwargs.get("search") == "AAPL"
+
+
+def test_summary_header_search() -> None:
+    """_build_summary_header renders the search term alongside other company filters."""
+    header = _build_summary_header({"search": "AAPL"})
+    assert 'search: "AAPL"' in header
+
+
 # --- BLS filter tests ---
 
 

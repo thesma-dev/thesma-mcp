@@ -36,7 +36,7 @@ def _render_exchange(value: Any) -> str:
 
 @mcp.tool(
     description=(
-        "Find US public companies by name or ticker symbol. "
+        "Find US public companies by name substring or ticker prefix (case-insensitive). "
         "Use this to look up a company before querying its financials, ratios, or filings."
     )
 )
