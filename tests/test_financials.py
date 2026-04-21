@@ -239,3 +239,104 @@ class TestGetFinancialMetric:
         _app(mock_ctx).client.financials.get = AsyncMock(return_value=SAMPLE_INCOME)
         result = await get_financials("AAPL", mock_ctx)
         assert "Apple Inc." in result
+
+
+# IFRS-06: dynamic currency from SDK response — replaces the hardcoded
+# "Currency: USD" literal so IFRS filers (EUR/JPY/etc.) render correctly.
+SAMPLE_IFRS_EUR = _make_sdk_response(
+    {
+        "company": {"cik": "0001639920", "ticker": "SPOT", "name": "Spotify Technology"},
+        "statement": "income",
+        "period": "annual",
+        "fiscal_year": 2024,
+        "fiscal_quarter": None,
+        "fiscal_year_end": None,
+        "filing_accession": "0001639920-25-000010",
+        "currency": "EUR",
+        "line_items": {
+            "revenue": 15_600_000_000,
+            "gross_profit": 4_600_000_000,
+            "operating_income": 1_400_000_000,
+            "net_income": 1_140_000_000,
+            "eps_diluted": 5.48,
+        },
+        "metadata": {"source": "ixbrl"},
+    }
+)
+
+
+class TestGetFinancialsIFRSCurrency:
+    async def test_ifrs_filer_shows_eur_not_usd(self, mock_ctx: MagicMock) -> None:
+        """IFRS-06: a filer reporting in EUR renders 'Currency: EUR'."""
+        _app(mock_ctx).client.financials.get = AsyncMock(return_value=SAMPLE_IFRS_EUR)
+        result = await get_financials("SPOT", mock_ctx)
+        assert "Currency: EUR" in result
+        assert "Currency: USD" not in result
+
+    async def test_null_currency_falls_back_to_usd_with_warning(self, mock_ctx: MagicMock, caplog) -> None:
+        """IFRS-06: fallback MUST be loud — missing currency emits WARNING."""
+        import logging
+
+        null_resp = _make_sdk_response(
+            {
+                "company": {"cik": "0000320193", "ticker": "AAPL", "name": "Apple Inc."},
+                "statement": "income",
+                "period": "annual",
+                "fiscal_year": 2024,
+                "fiscal_quarter": None,
+                "fiscal_year_end": None,
+                "filing_accession": "0000320193-24-000123",
+                "currency": None,
+                "line_items": {"revenue": 391_035_000_000, "net_income": 93_736_000_000},
+                "metadata": {"source": "ixbrl"},
+            }
+        )
+        _app(mock_ctx).client.financials.get = AsyncMock(return_value=null_resp)
+
+        with caplog.at_level(logging.WARNING, logger="thesma_mcp.tools.financials"):
+            result = await get_financials("AAPL", mock_ctx)
+        assert "Currency: USD" in result
+        # Warning must fire — silent fallback reproduces the bug invisibly.
+        assert any("currency field absent" in rec.message for rec in caplog.records)
+
+
+class TestGetFinancialMetricIFRSCurrency:
+    async def test_metric_ifrs_filer_shows_eur(self, mock_ctx: MagicMock) -> None:
+        """IFRS-06: time-series output reads currency from SDK response."""
+        resp = _make_sdk_response(
+            {
+                "company": {"cik": "0001639920", "ticker": "SPOT", "name": "Spotify"},
+                "metric": "revenue",
+                "period": "annual",
+                "currency": "EUR",
+                "series": [
+                    {"fiscal_year": 2024, "value": 15_600_000_000, "filing_accession": "a1"},
+                    {"fiscal_year": 2023, "value": 13_250_000_000, "filing_accession": "a2"},
+                ],
+            }
+        )
+        _app(mock_ctx).client.financials.time_series = AsyncMock(return_value=resp)
+        result = await get_financial_metric("SPOT", "revenue", mock_ctx)
+        assert "Currency: EUR" in result
+        assert "Currency: USD" not in result
+
+    async def test_metric_null_currency_falls_back_to_usd_with_warning(self, mock_ctx: MagicMock, caplog) -> None:
+        import logging
+
+        resp = _make_sdk_response(
+            {
+                "company": {"cik": "0000320193", "ticker": "AAPL", "name": "Apple Inc."},
+                "metric": "revenue",
+                "period": "annual",
+                "currency": None,
+                "series": [
+                    {"fiscal_year": 2024, "value": 391_035_000_000, "filing_accession": "a1"},
+                ],
+            }
+        )
+        _app(mock_ctx).client.financials.time_series = AsyncMock(return_value=resp)
+
+        with caplog.at_level(logging.WARNING, logger="thesma_mcp.tools.financials"):
+            result = await get_financial_metric("AAPL", "revenue", mock_ctx)
+        assert "Currency: USD" in result
+        assert any("currency field absent" in rec.message for rec in caplog.records)

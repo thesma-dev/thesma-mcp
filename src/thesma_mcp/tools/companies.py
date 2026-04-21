@@ -37,7 +37,10 @@ def _render_exchange(value: Any) -> str:
 @mcp.tool(
     description=(
         "Find US public companies by name substring or ticker prefix (case-insensitive). "
-        "Use this to look up a company before querying its financials, ratios, or filings."
+        "Use this to look up a company before querying its financials, ratios, or filings. "
+        "Optional filters: taxonomy='us-gaap' or 'ifrs-full' to narrow to US-GAAP 10-K vs "
+        "IFRS 20-F filers; currency='<ISO-4217 code>' (e.g. 'USD', 'EUR') to narrow by "
+        "presentation currency."
     )
 )
 async def search_companies(
@@ -46,6 +49,8 @@ async def search_companies(
     tier: str | None = None,
     exchange: str | None = None,
     domicile: str | None = None,
+    taxonomy: str | None = None,
+    currency: str | None = None,
     limit: int = 20,
 ) -> str:
     """Search for companies by name, ticker, or sector."""
@@ -59,6 +64,8 @@ async def search_companies(
             ticker=query.upper(),
             exchange=exchange_value,
             domicile=domicile,
+            taxonomy=taxonomy,
+            currency=currency,
         )
         if response.data:
             return _format_company_list(response.data, query)
@@ -72,6 +79,8 @@ async def search_companies(
             tier=tier,
             exchange=exchange_value,
             domicile=domicile,
+            taxonomy=taxonomy,
+            currency=currency,
             per_page=limit,
         )
     except ThesmaError as e:

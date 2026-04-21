@@ -151,6 +151,88 @@ def test_summary_header_search() -> None:
     assert 'search: "AAPL"' in header
 
 
+@pytest.mark.asyncio
+async def test_screen_companies_passes_taxonomy() -> None:
+    """taxonomy kwarg is forwarded to the underlying SDK screener call."""
+    resp = _make_paginated_response(_default_companies())
+    ctx = _make_ctx(resp)
+    await screen_companies(ctx, taxonomy="ifrs-full")
+    kwargs = ctx.request_context.lifespan_context.client.screener.screen.call_args.kwargs
+    assert kwargs.get("taxonomy") == "ifrs-full"
+
+
+@pytest.mark.asyncio
+async def test_screen_companies_passes_currency() -> None:
+    """currency kwarg is forwarded to the underlying SDK screener call."""
+    resp = _make_paginated_response(_default_companies())
+    ctx = _make_ctx(resp)
+    await screen_companies(ctx, currency="EUR")
+    kwargs = ctx.request_context.lifespan_context.client.screener.screen.call_args.kwargs
+    assert kwargs.get("currency") == "EUR"
+
+
+@pytest.mark.asyncio
+async def test_screen_companies_passes_taxonomy_and_currency_combined() -> None:
+    """Both new kwargs can be combined in a single call."""
+    resp = _make_paginated_response(_default_companies())
+    ctx = _make_ctx(resp)
+    await screen_companies(ctx, taxonomy="us-gaap", currency="USD")
+    kwargs = ctx.request_context.lifespan_context.client.screener.screen.call_args.kwargs
+    assert kwargs.get("taxonomy") == "us-gaap"
+    assert kwargs.get("currency") == "USD"
+
+
+@pytest.mark.asyncio
+async def test_screen_companies_omits_taxonomy_and_currency_when_none() -> None:
+    """Omitting both kwargs forwards None (no accidental empty-string coercion)."""
+    resp = _make_paginated_response(_default_companies())
+    ctx = _make_ctx(resp)
+    await screen_companies(ctx)
+    kwargs = ctx.request_context.lifespan_context.client.screener.screen.call_args.kwargs
+    assert kwargs.get("taxonomy") is None
+    assert kwargs.get("currency") is None
+
+
+@pytest.mark.asyncio
+async def test_screen_companies_taxonomy_value_lowercase_passes_through() -> None:
+    """The MCP layer is pure pass-through; the API validates case server-side."""
+    resp = _make_paginated_response(_default_companies())
+    ctx = _make_ctx(resp)
+    await screen_companies(ctx, taxonomy="ifrs-full")
+    kwargs = ctx.request_context.lifespan_context.client.screener.screen.call_args.kwargs
+    assert kwargs.get("taxonomy") == "ifrs-full"
+
+
+@pytest.mark.asyncio
+async def test_screen_companies_currency_value_uppercase_passes_through() -> None:
+    """currency='eur' is forwarded verbatim — the API normalises server-side."""
+    resp = _make_paginated_response(_default_companies())
+    ctx = _make_ctx(resp)
+    await screen_companies(ctx, currency="eur")
+    kwargs = ctx.request_context.lifespan_context.client.screener.screen.call_args.kwargs
+    assert kwargs.get("currency") == "eur"
+
+
+def test_summary_header_taxonomy() -> None:
+    """_build_summary_header renders the taxonomy filter alongside other company filters."""
+    header = _build_summary_header({"taxonomy": "ifrs-full"})
+    assert "taxonomy: ifrs-full" in header
+
+
+def test_summary_header_currency() -> None:
+    """_build_summary_header renders the currency filter alongside other company filters."""
+    header = _build_summary_header({"currency": "EUR"})
+    assert "currency: EUR" in header
+
+
+def test_summary_header_taxonomy_and_currency_combined() -> None:
+    """Taxonomy + currency + a numeric filter all render together coherently."""
+    header = _build_summary_header({"taxonomy": "us-gaap", "currency": "USD", "min_gross_margin": 40})
+    assert "taxonomy: us-gaap" in header
+    assert "currency: USD" in header
+    assert "gross margin >= 40%" in header
+
+
 # --- BLS filter tests ---
 
 

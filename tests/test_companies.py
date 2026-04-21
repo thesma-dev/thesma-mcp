@@ -386,6 +386,88 @@ class TestSearchCompaniesExchangeDomicile:
         assert "Invalid exchange" in result
 
 
+class TestSearchCompaniesTaxonomyCurrency:
+    async def test_search_companies_passes_taxonomy_both_branches(self, mock_ctx: MagicMock) -> None:
+        """taxonomy filter must apply on BOTH the ticker-exact branch AND the name-search fallback."""
+        app = _app(mock_ctx)
+        empty = _make_paginated_response([])
+        results = _make_paginated_response(
+            [{"cik": "0001639920", "ticker": "SPOT", "name": "Spotify Technology S.A.", "company_tier": "russell1000"}]
+        )
+        app.client.companies.list = AsyncMock(side_effect=[empty, results])
+        await search_companies("spotify", mock_ctx, taxonomy="ifrs-full")
+        # Ticker branch (call_args_list[0]) must carry the filter.
+        assert app.client.companies.list.call_args_list[0].kwargs.get("taxonomy") == "ifrs-full"
+        # Name-search branch (call_args_list[1]) must also carry it.
+        assert app.client.companies.list.call_args_list[1].kwargs.get("taxonomy") == "ifrs-full"
+
+    async def test_search_companies_passes_currency_both_branches(self, mock_ctx: MagicMock) -> None:
+        """currency filter must apply on BOTH branches."""
+        app = _app(mock_ctx)
+        empty = _make_paginated_response([])
+        results = _make_paginated_response(
+            [{"cik": "0001639920", "ticker": "SPOT", "name": "Spotify Technology S.A.", "company_tier": "russell1000"}]
+        )
+        app.client.companies.list = AsyncMock(side_effect=[empty, results])
+        await search_companies("spotify", mock_ctx, currency="EUR")
+        assert app.client.companies.list.call_args_list[0].kwargs.get("currency") == "EUR"
+        assert app.client.companies.list.call_args_list[1].kwargs.get("currency") == "EUR"
+
+    async def test_search_companies_taxonomy_and_currency_combined_both_branches(self, mock_ctx: MagicMock) -> None:
+        """Combined filters must not cross-contaminate between branches.
+
+        Regression guard: if taxonomy were dropped from the ticker branch, a
+        US-GAAP ticker matching the query would surface despite an IFRS-only
+        filter request — a silent false positive.
+        """
+        app = _app(mock_ctx)
+        empty = _make_paginated_response([])
+        results = _make_paginated_response(
+            [{"cik": "0000320193", "ticker": "AAPL", "name": "Apple Inc.", "company_tier": "sp500"}]
+        )
+        app.client.companies.list = AsyncMock(side_effect=[empty, results])
+        await search_companies("apple", mock_ctx, taxonomy="us-gaap", currency="USD")
+        first = app.client.companies.list.call_args_list[0].kwargs
+        second = app.client.companies.list.call_args_list[1].kwargs
+        assert first.get("taxonomy") == "us-gaap"
+        assert first.get("currency") == "USD"
+        assert second.get("taxonomy") == "us-gaap"
+        assert second.get("currency") == "USD"
+
+    async def test_search_companies_omits_taxonomy_and_currency_when_none(self, mock_ctx: MagicMock) -> None:
+        """Without filter kwargs, both branches forward None (no silent coercion)."""
+        app = _app(mock_ctx)
+        empty = _make_paginated_response([])
+        results = _make_paginated_response(
+            [{"cik": "0000320193", "ticker": "AAPL", "name": "Apple Inc.", "company_tier": "sp500"}]
+        )
+        app.client.companies.list = AsyncMock(side_effect=[empty, results])
+        await search_companies("apple", mock_ctx)
+        first = app.client.companies.list.call_args_list[0].kwargs
+        second = app.client.companies.list.call_args_list[1].kwargs
+        assert first.get("taxonomy") is None
+        assert first.get("currency") is None
+        assert second.get("taxonomy") is None
+        assert second.get("currency") is None
+
+    async def test_search_companies_ticker_branch_short_circuits_with_taxonomy(self, mock_ctx: MagicMock) -> None:
+        """When the ticker branch hits, the name-search branch does not fire —
+        but the filter still applies to the ticker branch.
+        """
+        app = _app(mock_ctx)
+        hit = _make_paginated_response(
+            [{"cik": "0000320193", "ticker": "AAPL", "name": "Apple Inc.", "company_tier": "sp500"}]
+        )
+        empty = _make_paginated_response([])
+        # The second element is inert — short-circuit means the name-search
+        # branch never fires. Including it is defensive in case a regression
+        # introduces an unexpected second call.
+        app.client.companies.list = AsyncMock(side_effect=[hit, empty])
+        await search_companies("AAPL", mock_ctx, taxonomy="us-gaap")
+        assert app.client.companies.list.call_args_list[0].kwargs.get("taxonomy") == "us-gaap"
+        assert len(app.client.companies.list.call_args_list) == 1
+
+
 class TestGetCompanyExchangeDomicile:
     async def test_get_company_renders_exchange_domicile(self, mock_ctx: MagicMock) -> None:
         app = _app(mock_ctx)
