@@ -118,6 +118,14 @@ def _build_summary_header(params: dict[str, Any]) -> str:
     if search:
         parts.append(f'search: "{search}"')
 
+    taxonomy = params.get("taxonomy")
+    if taxonomy:
+        parts.append(f"taxonomy: {taxonomy}")
+
+    currency = params.get("currency")
+    if currency:
+        parts.append(f"currency: {currency}")
+
     filters: list[str] = []
     filter_map: list[tuple[str, str, str]] = [
         ("min_revenue", "revenue", ">="),
@@ -400,7 +408,10 @@ def _get_lending_context(lc: Any) -> dict[str, Any] | None:
         "server trims/escapes/skips nulls; does not normalise 'BRK.B' vs 'BRK-B' and does not "
         "consult ticker aliases; omit search rather than passing an empty string, which the server "
         "treats as a no-op; any match lacking a qualifying annual CompanyRatio row is silently "
-        "excluded by the screener inner-join)."
+        "excluded by the screener inner-join). "
+        "Filter by taxonomy='us-gaap' or 'ifrs-full' and/or by presentation currency via "
+        "currency='<ISO-4217 code>' (case-insensitive, e.g. 'USD', 'EUR', 'JPY'); both are "
+        "server-validated — unknown values return 400."
     )
 )
 async def screen_companies(
@@ -422,6 +433,8 @@ async def screen_companies(
     sic: str | None = None,
     exchange: str | None = None,
     domicile: str | None = None,
+    taxonomy: str | None = None,
+    currency: str | None = None,
     search: str | None = None,
     has_insider_buying: bool | None = None,
     has_institutional_increase: bool | None = None,
@@ -480,6 +493,8 @@ async def screen_companies(
         "sic": sic,
         "exchange": exchange,
         "domicile": domicile,
+        "taxonomy": taxonomy,
+        "currency": currency,
         "search": search,
         "has_insider_buying": has_insider_buying,
         "has_institutional_increase": has_institutional_increase,
@@ -531,6 +546,8 @@ async def screen_companies(
             sic=sic,
             exchange=_parse_exchange(exchange),
             domicile=domicile,
+            taxonomy=taxonomy,
+            currency=currency,
             search=search,
             has_insider_buying=api_has_insider,
             has_institutional_increase=api_has_institutional,

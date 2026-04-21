@@ -8,13 +8,17 @@ Give your AI assistant access to SEC, Census, BLS, and SBA data.
 
 ## What it does
 
-An [MCP](https://modelcontextprotocol.io/) server that wraps the [Thesma API](https://thesma.dev), giving AI assistants (Claude, Cursor, ChatGPT) native access to SEC EDGAR filings, Bureau of Labor Statistics employment data, and US Census Bureau demographics. Ask questions in plain English, get structured data back.
+An [MCP](https://modelcontextprotocol.io/) server that wraps the [Thesma API](https://thesma.dev), giving AI assistants (Claude, Cursor, ChatGPT) native access to SEC EDGAR filings — US-GAAP 10-K and IFRS 20-F, covering every US-listed public company on NYSE and NASDAQ (~6,000 companies) — plus Bureau of Labor Statistics employment data, US Census Bureau demographics, and SBA 7(a) small business lending. Ask questions in plain English, get structured data back.
 
 ## Quick example
 
 > "What was Apple's revenue last year?"
 
 The AI calls `get_financials` and returns Apple's income statement with formatted line items.
+
+> "What was Spotify's revenue last year?"
+
+The AI calls `get_financials` for SPOT and returns Spotify's income statement in EUR with `taxonomy: ifrs-full` and `by_nature` presentation metadata.
 
 > "Find high-margin S&P 500 companies where insiders are buying"
 
@@ -84,15 +88,15 @@ Get your API key at [portal.thesma.dev](https://portal.thesma.dev) (free tier: 2
 
 | Tool | Description |
 |------|-------------|
-| `search_companies` | Find US public companies by name, ticker, index tier, exchange, or domicile |
+| `search_companies` | Find US public companies by name, ticker, index tier, exchange, domicile, taxonomy, or currency |
 | `get_company` | Get company details — CIK, SIC code, fiscal year end, index membership, exchange, domicile |
 
 ### Financial Statements
 
 | Tool | Description |
 |------|-------------|
-| `get_financials` | Get income statement, balance sheet, or cash flow from SEC filings |
-| `get_financial_metric` | Get a single financial metric over time for trend analysis |
+| `get_financials` | Get income statement, balance sheet, or cash flow from SEC filings — US-GAAP 10-K and IFRS 20-F, returned in native currency |
+| `get_financial_metric` | Get a single financial metric over time for trend analysis; per-point currency honors presentation-currency transitions |
 
 ### Financial Ratios
 
@@ -105,7 +109,7 @@ Get your API key at [portal.thesma.dev](https://portal.thesma.dev) (free tier: 2
 
 | Tool | Description |
 |------|-------------|
-| `screen_companies` | Find companies matching financial criteria — profitability, growth, leverage, index tier, SIC, exchange, domicile, insider/institutional signals, labor market, SBA lending (county + industry) |
+| `screen_companies` | Find companies matching financial criteria — profitability, growth, leverage, index tier, SIC, exchange, domicile, taxonomy, currency, insider/institutional signals, labor market, SBA lending (county + industry) |
 
 ### Corporate Events
 
@@ -214,12 +218,13 @@ Get your API key at [portal.thesma.dev](https://portal.thesma.dev) (free tier: 2
 
 ## Data coverage
 
-- ~3,000 US public companies — about 98% of the investable US equity market by market cap
+- ~6,000 US-listed public companies on NYSE and NASDAQ — US-GAAP filers plus IFRS 20-F filers (Spotify, Nu Holdings, ASML, and other US-listed IFRS reporters). Native-currency reporting; no USD normalization.
 - **SEC EDGAR:** financial statements (2009-present), insider trades, institutional holdings, executive compensation, board data, corporate events, filings
 - **Bureau of Labor Statistics:** industry employment (CES), county wages (QCEW), occupation wages (OEWS), job openings and turnover (JOLTS), local unemployment (LAUS)
 - **Small Business Administration:** 7(a) loan program data — quarterly lending aggregates by county/state/industry, lender rankings, loan characteristics (size, term, rate, sub-programme), vintage cohort charge-off outcomes
 - **Labor & lending market enrichment:** `get_company` automatically includes BLS labor context and SBA 7(a) lending context; `screen_companies` supports labor market and SBA lending filters
-- All data sourced from US federal public-domain sources: SEC EDGAR, US Census Bureau, Bureau of Labor Statistics
+- **Known gaps:** IFRS bank filings (Nu Holdings, HSBC, Deutsche Bank, etc.) — the core banking-statement extensions (`net_interest_income`, etc.) are US-GAAP-specific today; IFRS banking fields land in a future release.
+- All data sourced from US federal public-domain sources: SEC EDGAR, US Census Bureau, Bureau of Labor Statistics, Small Business Administration
 
 ## Links
 

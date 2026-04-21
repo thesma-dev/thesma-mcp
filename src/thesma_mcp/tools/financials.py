@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from mcp.server.fastmcp import Context
@@ -9,6 +10,30 @@ from thesma.errors import ThesmaError
 
 from thesma_mcp.formatters import format_currency, format_percent, format_source
 from thesma_mcp.server import AppContext, get_client, mcp
+
+logger = logging.getLogger(__name__)
+
+
+def _resolve_currency(response_data: Any, context: str = "unknown") -> str:
+    """Extract ``currency`` from an SDK response, falling back to ``USD``
+    with a WARNING log if the field is missing or None.
+
+    IFRS-06: silent fallback would reproduce the original hardcode bug
+    invisibly. Emit a WARNING so operations can correlate the fallback
+    with an SDK-version skew or a legacy cached response.
+    """
+    currency = getattr(response_data, "currency", None)
+    if currency is None or not isinstance(currency, str) or not currency.strip():
+        logger.warning(
+            "currency field absent from SDK response (context=%s); defaulting to USD — "
+            "check SDK hoist status (IFRS-01 risk #7)",
+            context,
+        )
+        return "USD"
+    # Narrowed to str by the guard above; explicit str() satisfies mypy since
+    # the getattr return type is Any.
+    return str(currency)
+
 
 INCOME_FIELDS = [
     ("revenue", "Revenue"),
@@ -95,7 +120,10 @@ def _validate_period_quarter(period: str, quarter: int | None) -> str | None:
 @mcp.tool(
     description=(
         "Get financial statements (income statement, balance sheet, or cash flow) for a US public company "
-        "from SEC filings. Returns key line items with formatted values."
+        "from SEC filings. Returns key line items with formatted values. "
+        "Responses carry taxonomy ('us-gaap' or 'ifrs-full'), native-reported currency (ISO-4217, not "
+        "normalised to USD), and presentation-format metadata in the underlying data (by_function, "
+        "by_nature, or unknown)."
     )
 )
 async def get_financials(
@@ -148,7 +176,7 @@ def _format_statement(data: Any, ticker: str, statement: str, period: str) -> st
     period_label = f"FY {fiscal_year}" if period == "annual" else f"Q{fiscal_quarter} {fiscal_year}"
     filing_type = "10-K" if period == "annual" else "10-Q"
 
-    lines = [f"{company_name} ({company_ticker}) — {title}, {period_label}", ""]
+    lines = [f"{company_name} ({company_ticker}) \u2014 {title}, {period_label}", ""]
 
     fields = STATEMENT_FIELDS.get(statement, [])
     line_items = data.line_items
@@ -174,7 +202,11 @@ def _format_statement(data: Any, ticker: str, statement: str, period: str) -> st
         lines.append(f"{label + ':':<24}{formatted}{margin_str}")
 
     lines.append("")
-    lines.append("Currency: USD")
+    # IFRS-06: currency from SDK response, not hardcoded. Fallback to
+    # USD with a WARNING log if the field is missing (legacy cache, SDK
+    # skew) \u2014 see _resolve_currency.
+    currency = _resolve_currency(data, context=f"get_financials:{ticker}:{statement}")
+    lines.append(f"Currency: {currency}")
     lines.append(format_source(filing_type, accession=filing_accession, data_source=data_source))
     if fiscal_year:
         period_desc = "fiscal year ending" if period == "annual" else f"Q{fiscal_quarter} of fiscal year"
@@ -190,6 +222,8 @@ def _get_ctx(ctx: Context[Any, AppContext, Any]) -> AppContext:
 @mcp.tool(
     description=(
         "Get a single financial metric over time. Returns a time series for trend analysis. "
+        "Series points carry per-point currency and taxonomy metadata, authoritative over the "
+        "envelope currency when a filer changes presentation currency mid-series. "
         "Income metrics: revenue, cost_of_revenue, gross_profit, operating_expenses, "
         "research_and_development, selling_general_admin, operating_income, interest_expense, "
         "interest_income, pre_tax_income, income_tax_expense, net_income, eps_basic, eps_diluted, "
@@ -239,7 +273,7 @@ async def get_financial_metric(
     metric_label = metric.replace("_", " ").title()
     period_label = "Annual" if period == "annual" else "Quarterly"
 
-    lines = [f"{company_name} ({company_ticker}) — {metric_label} ({period_label})", ""]
+    lines = [f"{company_name} ({company_ticker}) \u2014 {metric_label} ({period_label})", ""]
     lines.append(f"{'Year':<8}Value")
 
     for dp in series:
@@ -257,7 +291,11 @@ async def get_financial_metric(
     max_year = max(years) if years else ""
 
     lines.append("")
+    # IFRS-06: currency from SDK response (not hardcoded). Time-series
+    # responses expose ``currency`` at the series envelope \u2014 fall back
+    # to USD with a WARNING if missing.
+    currency = _resolve_currency(data, context=f"get_financial_metric:{ticker}:{metric}")
     lines.append(f"{count} data point{'s' if count != 1 else ''} from {min_year} to {max_year}.")
-    lines.append("Source: SEC EDGAR, iXBRL filings. Currency: USD.")
+    lines.append(f"Source: SEC EDGAR, iXBRL filings. Currency: {currency}.")
 
     return "\n".join(lines)
