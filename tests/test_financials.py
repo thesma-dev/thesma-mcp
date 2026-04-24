@@ -568,3 +568,117 @@ async def test_mcp25_default_mode_unchanged() -> None:
     # Legacy shape has "Apple Inc. (AAPL) — Income Statement, FY 2024" — not "History".
     assert "— Income Statement, FY 2024" in result
     assert "History" not in result
+
+
+# --- MCP-28: currency symbol map + sign-before-symbol + Source enum resilience ---
+
+
+class TestGetFinancialsCurrencySymbolMulti:
+    """MCP-28: native currency symbols in rendered output."""
+
+    async def test_get_financials_usd_filer_renders_dollar_prefix(self, mock_ctx: MagicMock) -> None:
+        _app(mock_ctx).client.financials.get = AsyncMock(return_value=SAMPLE_INCOME)
+        result = await get_financials("AAPL", mock_ctx)
+        assert "$" in result
+        assert "Source.ixbrl" not in result
+
+    async def test_get_financials_usd_filer_renders_negative_before_symbol(self, mock_ctx: MagicMock) -> None:
+        neg_resp = _make_sdk_response(
+            {
+                "company": {"cik": "0000320193", "ticker": "AAPL", "name": "Apple Inc."},
+                "statement": "income",
+                "period": "annual",
+                "fiscal_year": 2024,
+                "fiscal_quarter": None,
+                "filing_accession": "0000320193-24-000123",
+                "currency": "USD",
+                "line_items": {
+                    "revenue": 391_035_000_000,
+                    "operating_income": -266_000_000,
+                },
+                "metadata": {"source": "ixbrl"},
+            }
+        )
+        _app(mock_ctx).client.financials.get = AsyncMock(return_value=neg_resp)
+        result = await get_financials("AAPL", mock_ctx)
+        assert "-$266.0M" in result
+        assert "$-266.0M" not in result
+
+    async def test_get_financials_eur_filer_renders_euro_symbol_and_ixbrl(self, mock_ctx: MagicMock) -> None:
+        _app(mock_ctx).client.financials.get = AsyncMock(return_value=SAMPLE_IFRS_EUR)
+        result = await get_financials("SPOT", mock_ctx)
+        assert "€" in result
+        assert "Currency: EUR" in result
+        assert "(iXBRL)" in result
+        assert "Source.ixbrl" not in result
+        assert "$" not in result
+
+    async def test_get_financials_chf_filer_renders_suffix_form(self, mock_ctx: MagicMock) -> None:
+        chf_resp = _make_sdk_response(
+            {
+                "company": {"cik": "0000012345", "ticker": "NESN", "name": "Nestle SA (synthetic)"},
+                "statement": "income",
+                "period": "annual",
+                "fiscal_year": 2024,
+                "fiscal_quarter": None,
+                "filing_accession": "0000012345-25-000001",
+                "currency": "CHF",
+                "line_items": {
+                    "revenue": 94_400_000_000,
+                    "operating_income": 15_000_000_000,
+                    "net_income": 10_800_000_000,
+                },
+                "metadata": {"source": "ixbrl"},
+            }
+        )
+        _app(mock_ctx).client.financials.get = AsyncMock(return_value=chf_resp)
+        result = await get_financials("NESN", mock_ctx)
+        assert "CHF " in result
+        assert "Currency: CHF" in result
+        assert "$" not in result
+
+    async def test_get_financials_missing_currency_warns_and_defaults_usd(
+        self, mock_ctx: MagicMock, caplog: Any
+    ) -> None:
+        import logging
+
+        null_resp = _make_sdk_response(
+            {
+                "company": {"cik": "0000320193", "ticker": "AAPL", "name": "Apple Inc."},
+                "statement": "income",
+                "period": "annual",
+                "fiscal_year": 2024,
+                "fiscal_quarter": None,
+                "filing_accession": "0000320193-24-000123",
+                "currency": None,
+                "line_items": {"revenue": 391_035_000_000, "net_income": 93_736_000_000},
+                "metadata": {"source": "ixbrl"},
+            }
+        )
+        _app(mock_ctx).client.financials.get = AsyncMock(return_value=null_resp)
+        with caplog.at_level(logging.WARNING, logger="thesma_mcp.tools.financials"):
+            result = await get_financials("AAPL", mock_ctx)
+        assert "Currency: USD" in result
+        assert "$" in result
+        assert any("currency field absent" in rec.message for rec in caplog.records)
+
+
+class TestGetFinancialMetricCurrencySymbolMulti:
+    async def test_get_financial_metric_eur_filer(self, mock_ctx: MagicMock) -> None:
+        resp = _make_sdk_response(
+            {
+                "company": {"cik": "0001639920", "ticker": "SPOT", "name": "Spotify"},
+                "metric": "revenue",
+                "period": "annual",
+                "currency": "EUR",
+                "series": [
+                    {"fiscal_year": 2024, "value": 15_600_000_000, "filing_accession": "a1"},
+                    {"fiscal_year": 2023, "value": 13_250_000_000, "filing_accession": "a2"},
+                ],
+            }
+        )
+        _app(mock_ctx).client.financials.time_series = AsyncMock(return_value=resp)
+        result = await get_financial_metric("SPOT", "revenue", mock_ctx)
+        assert "€" in result
+        assert "Currency: EUR" in result
+        assert "$" not in result

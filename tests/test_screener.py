@@ -856,3 +856,35 @@ class TestScreenerSbaRegression:
         result = await screen_companies(ctx, include="labor_context,lending_context")
         # SBA freshness footer present, no crash
         assert "SBA data as of 2025-Q4" in result
+
+
+# --- MCP-29: tool-description scale-convention guard ---
+
+
+class TestScreenerScaleConvention:
+    """MCP-29: @mcp.tool description documents the integer-percent convention."""
+
+    def test_screen_companies_description_mentions_integer_percent(self) -> None:
+        import inspect
+
+        from thesma_mcp.tools.screener import screen_companies
+
+        source = inspect.getsource(screen_companies).lower()
+        assert "integer percent" in source
+        assert "20 for 20%" in source
+        assert "0<x<1" in source or "0 < x < 1" in source
+        assert "0 for no minimum" in source
+
+    def test_screen_companies_description_under_token_budget(self) -> None:
+        import inspect
+
+        from thesma_mcp.tools import screener as screener_module
+
+        source = inspect.getsource(screener_module)
+        start = source.index("@mcp.tool(")
+        end = source.index(")\nasync def screen_companies")
+        description_block = source[start:end]
+        assert len(description_block) < 2500, (
+            f"screen_companies @mcp.tool description ballooned to {len(description_block)} chars — "
+            "review whether the addition is load-bearing or cuttable."
+        )
