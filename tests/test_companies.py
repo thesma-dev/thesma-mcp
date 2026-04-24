@@ -1010,7 +1010,7 @@ class TestGetCompanyLendingContext:
         assert kwargs.get("include") == "labor_context,lending_context"
 
 
-# --- MCP-26: include composition primitive (8 values, events disabled in v1) ---
+# --- MCP-27: include composition primitive (all 9 values, events enabled via T-215) ---
 
 
 def _make_composed_response(extras: dict[str, Any]) -> Any:
@@ -1039,30 +1039,89 @@ class TestGetCompanyIncludeValidation:
         result = await get_company("AAPL", mock_ctx, include="bogus")
         assert "Unknown include value(s): bogus" in result
 
-    async def test_events_alone_returns_disabled_message(self, mock_ctx: MagicMock) -> None:
+    async def test_events_alone_renders_events_section(self, mock_ctx: MagicMock) -> None:
+        """events slot as direct attribute on SimpleNamespace (NOT model_extra) —
+        exercises the `getattr(data, "events", None)` path that
+        `_resolve_slot_value` hits on real SDK responses since SDK-33 declared
+        `EnrichedCompanyData.events: Any | None` as a typed field.
+        """
+        from types import SimpleNamespace
+
         app = _app(mock_ctx)
         app.resolver.resolve = AsyncMock(return_value="0000320193")
+        data = SimpleNamespace(
+            cik="0000320193",
+            ticker="AAPL",
+            name="Apple Inc.",
+            sic_code="3571",
+            sic_description="Electronic Computers",
+            company_tier=SimpleNamespace(value="sp500"),
+            fiscal_year_end="September (0930)",
+            exchange=None,
+            domicile=None,
+            events=[
+                {
+                    "filing_accession": "0000320193-25-000012",
+                    "filed_at": "2025-12-01T16:00:00+00:00",
+                    "category": "earnings",
+                    "items": [{"code": "2.02", "description": "Results of Operations and Financial Condition"}],
+                }
+            ],
+            model_extra={},
+        )
+        app.client.companies.get = AsyncMock(return_value=SimpleNamespace(data=data))
         result = await get_company("AAPL", mock_ctx, include="events")
-        assert "temporarily disabled" in result
-        assert "get_events" in result
+        assert "## Recent 8-K Events" in result
+        assert "2025-12-01" in result
+        assert "earnings" in result
+        assert "2.02" in result
 
-    async def test_events_in_combination_returns_disabled_message(self, mock_ctx: MagicMock) -> None:
+    async def test_events_in_combination_renders_all_sections(self, mock_ctx: MagicMock) -> None:
+        """Combined payload (events as direct attribute + financials + ratios
+        via model_extra). Asserts all three section headers render.
+        """
+        from types import SimpleNamespace
+
         app = _app(mock_ctx)
         app.resolver.resolve = AsyncMock(return_value="0000320193")
+        data = SimpleNamespace(
+            cik="0000320193",
+            ticker="AAPL",
+            name="Apple Inc.",
+            sic_code="3571",
+            sic_description="Electronic Computers",
+            company_tier=SimpleNamespace(value="sp500"),
+            fiscal_year_end="September (0930)",
+            exchange=None,
+            domicile=None,
+            events=[
+                {
+                    "filing_accession": "0000320193-25-000012",
+                    "filed_at": "2025-12-01T16:00:00+00:00",
+                    "category": "earnings",
+                    "items": [{"code": "2.02", "description": "Results of Operations and Financial Condition"}],
+                }
+            ],
+            model_extra={
+                "financials": {"line_items": {"revenue": 391_035_000_000}, "currency": "USD"},
+                "ratios": {"gross_margin": 46.2},
+            },
+        )
+        app.client.companies.get = AsyncMock(return_value=SimpleNamespace(data=data))
         result = await get_company("AAPL", mock_ctx, include="financials,events,ratios")
-        assert "temporarily disabled" in result
-        # Remaining values listed in the message
-        assert "financials" in result
-        assert "ratios" in result
+        assert "## Recent 8-K Events" in result
+        assert "## Financials" in result
+        assert "## Ratios" in result
 
-    async def test_events_wins_over_unknown_when_both_present(self, mock_ctx: MagicMock) -> None:
-        """events check runs before unknown-token check — the more actionable
-        message fires first.
+    async def test_unknown_include_lists_events_as_valid_value(self, mock_ctx: MagicMock) -> None:
+        """The `- {"events"}` exclusion was removed from the accepted_list, so
+        the unknown-value error now lists `events` as a valid include value.
         """
         app = _app(mock_ctx)
         app.resolver.resolve = AsyncMock(return_value="0000320193")
-        result = await get_company("AAPL", mock_ctx, include="events,bogus")
-        assert "temporarily disabled" in result
+        result = await get_company("AAPL", mock_ctx, include="bogus")
+        assert "Unknown include value(s): bogus" in result
+        assert "events" in result
 
     async def test_empty_include_returns_error(self, mock_ctx: MagicMock) -> None:
         app = _app(mock_ctx)
@@ -1277,3 +1336,170 @@ class TestGetCompanyPartialFailure:
         # (even though the shape is unexpected — the teaser formatter's
         # `isinstance(slot, list)` guard kicks in).
         assert "## Institutional Holders" in result
+
+
+def _make_events_response(events_slot: Any, extras: dict[str, Any] | None = None) -> Any:
+    """Build a DataResponse-like object with `events` as a direct attribute.
+
+    This exercises the `getattr(data, "events", None)` path (not the
+    model_extra fallback) — matches the shape SDK-33+ returns for events.
+    """
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        data=SimpleNamespace(
+            cik="0000320193",
+            ticker="AAPL",
+            name="Apple Inc.",
+            sic_code="3571",
+            sic_description="Electronic Computers",
+            company_tier=SimpleNamespace(value="sp500"),
+            fiscal_year_end="September (0930)",
+            exchange=None,
+            domicile=None,
+            events=events_slot,
+            model_extra=extras or {},
+        )
+    )
+
+
+class TestGetCompanyEventsTeaser:
+    async def test_events_empty_list_renders_placeholder(self, mock_ctx: MagicMock) -> None:
+        """data.events = [] renders section header + placeholder — guards
+        against `[]` accidentally dropping the section entirely.
+        """
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        app.client.companies.get = AsyncMock(return_value=_make_events_response([]))
+        result = await get_company("AAPL", mock_ctx, include="events")
+        assert "## Recent 8-K Events" in result
+        assert "No recent 8-K filings." in result
+
+    async def test_events_expander_error_renders_correct_title(self, mock_ctx: MagicMock) -> None:
+        """Partial-failure shape: events slot is {"error": {...}}. Title must
+        render as "## Recent 8-K Events" (from the titles dict), NOT "## events"
+        (the fallback). Catches regression where the titles dict isn't updated.
+        """
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        error_slot = {
+            "error": {
+                "code": "upstream_timeout",
+                "message": "events did not complete within 3.0s",
+            }
+        }
+        app.client.companies.get = AsyncMock(return_value=_make_events_response(error_slot))
+        result = await get_company("AAPL", mock_ctx, include="events")
+        assert "## Recent 8-K Events" in result
+        assert "## events" not in result  # fallback would render this
+        assert "upstream_timeout" in result
+
+    async def test_events_row_with_null_filed_at_does_not_crash(self, mock_ctx: MagicMock) -> None:
+        """Defensive guard: filed_at=None must not raise; renders 'unknown date'
+        placeholder and the rest of the section still renders cleanly.
+        """
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        events = [
+            {
+                "filing_accession": "0000320193-25-000099",
+                "filed_at": None,
+                "category": "earnings",
+                "items": [{"code": "2.02", "description": "Results of Operations"}],
+            }
+        ]
+        app.client.companies.get = AsyncMock(return_value=_make_events_response(events))
+        result = await get_company("AAPL", mock_ctx, include="events")
+        assert "## Recent 8-K Events" in result
+        assert "unknown date" in result
+        assert "earnings" in result
+        assert "2.02" in result
+
+    async def test_events_row_with_empty_items_does_not_crash(self, mock_ctx: MagicMock) -> None:
+        """Defensive guard: items=[] must not raise IndexError. Row renders
+        with just date + category (no code+description fragment per the
+        renderer's deterministic choice).
+        """
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        events = [
+            {
+                "filing_accession": "0000320193-25-000100",
+                "filed_at": "2025-12-01T16:00:00+00:00",
+                "category": "earnings",
+                "items": [],
+            }
+        ]
+        app.client.companies.get = AsyncMock(return_value=_make_events_response(events))
+        result = await get_company("AAPL", mock_ctx, include="events")
+        assert "## Recent 8-K Events" in result
+        assert "2025-12-01" in result
+        assert "earnings" in result
+
+    async def test_events_canonical_order_between_holders_and_compensation(self, mock_ctx: MagicMock) -> None:
+        """Seed all 9 expander slots; scramble the requested order; assert
+        canonical render order: idx_holders < idx_events < idx_compensation.
+        Guards INCLUDE_RENDER_ORDER insertion position.
+        """
+        from types import SimpleNamespace
+
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        events = [
+            {
+                "filing_accession": "0000320193-25-000012",
+                "filed_at": "2025-12-01T16:00:00+00:00",
+                "category": "earnings",
+                "items": [{"code": "2.02", "description": "Results"}],
+            }
+        ]
+        extras = {
+            "labor_context": {"industry": {"naics_code": "334111"}},
+            "lending_context": {"local_market": {"county_name": "Santa Clara County", "county_fips": "06085"}},
+            "financials": {"line_items": {"revenue": 391_035_000_000}, "currency": "USD"},
+            "ratios": {"gross_margin": 46.2},
+            "insider_trades": [
+                {
+                    "person": {"name": "Jane Doe"},
+                    "transaction_date": "2025-11-01",
+                    "type": "sale",
+                    "total_value": 1_000_000,
+                }
+            ],
+            "holders": [
+                {
+                    "fund_name": "Vanguard",
+                    "shares": 1_000_000,
+                    "market_value": 150_000_000,
+                    "report_quarter": "2025-Q3",
+                }
+            ],
+            "compensation": {
+                "executives": [{"name": "Tim Cook", "title": "CEO", "compensation": {"total": 63_200_000}}]
+            },
+            "board": {"members": [{"name": "Arthur Levinson", "is_independent": True, "committees": []}]},
+        }
+        data = SimpleNamespace(
+            cik="0000320193",
+            ticker="AAPL",
+            name="Apple Inc.",
+            sic_code="3571",
+            sic_description="Electronic Computers",
+            company_tier=SimpleNamespace(value="sp500"),
+            fiscal_year_end="September (0930)",
+            exchange=None,
+            domicile=None,
+            events=events,
+            model_extra=extras,
+        )
+        app.client.companies.get = AsyncMock(return_value=SimpleNamespace(data=data))
+        # Deliberately scrambled input order.
+        result = await get_company(
+            "AAPL",
+            mock_ctx,
+            include="board,events,holders,labor_context,lending_context,financials,ratios,insider_trades,compensation",
+        )
+        idx_holders = result.index("## Institutional Holders")
+        idx_events = result.index("## Recent 8-K Events")
+        idx_compensation = result.index("## Executive Compensation")
+        assert idx_holders < idx_events < idx_compensation
