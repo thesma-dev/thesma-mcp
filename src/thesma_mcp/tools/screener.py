@@ -404,6 +404,8 @@ def _get_lending_context(lc: Any) -> dict[str, Any] | None:
         "Sort by any ratio: gross_margin, operating_margin, net_margin, return_on_equity, "
         "return_on_assets, debt_to_equity, current_ratio, interest_coverage, "
         "revenue_growth_yoy, net_income_growth_yoy, eps_growth_yoy. "
+        "Margin/ratio/growth filters use integer percent (20 for 20%, not 0.20). "
+        "Values 0<x<1 are rejected as ambiguous. Pass 0 for no minimum. "
         "Use search='<term>' to filter by name substring or ticker prefix (case-insensitive; "
         "server trims/escapes/skips nulls; does not normalise 'BRK.B' vs 'BRK-B' and does not "
         "consult ticker aliases; omit search rather than passing an empty string, which the server "
