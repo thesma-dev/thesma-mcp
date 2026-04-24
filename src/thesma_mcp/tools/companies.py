@@ -129,9 +129,10 @@ def _tier_label(tier: str | None) -> str:
     return mapping.get(tier, tier)
 
 
-# MCP-26: ?include= composition primitive — SDK-32 widened the API's include= from
-# 2 values (labor_context, lending_context) to 9. MCP mirrors 8 of them; `events`
-# is pre-rejected because the API disabled the expander in v1 pending a latency fix.
+# MCP-27: ?include= composition primitive — MCP mirrors all 9 API expander values
+# end-to-end (`labor_context`, `lending_context`, `financials`, `ratios`, `events`,
+# `insider_trades`, `holders`, `compensation`, `board`). Events was previously
+# pre-rejected; T-215 (govdata-api) + SDK-34 (thesma 0.10.1.1) enabled the expander.
 
 VALID_INCLUDES: frozenset[str] = frozenset(
     {
@@ -147,10 +148,10 @@ VALID_INCLUDES: frozenset[str] = frozenset(
     }
 )
 
-# Canonical render order — labor + lending first to preserve pre-MCP-26 section
-# positions for backwards-compat, then financials → ratios → insider_trades →
-# holders → compensation → board. `events` is in VALID_INCLUDES but absent here
-# because it's pre-rejected before rendering ever runs.
+# Canonical render order — labor + lending first (preserves pre-MCP-26 section
+# positions for backwards-compat), then financials → ratios → insider_trades →
+# holders → events → compensation → board. Events sits between the capital-
+# markets block and the personnel block, reflecting "material corporate action."
 INCLUDE_RENDER_ORDER: list[str] = [
     "labor_context",
     "lending_context",
@@ -158,6 +159,7 @@ INCLUDE_RENDER_ORDER: list[str] = [
     "ratios",
     "insider_trades",
     "holders",
+    "events",
     "compensation",
     "board",
 ]
@@ -168,30 +170,15 @@ DEFAULT_INCLUDE = "labor_context,lending_context"
 def _validate_include(include: str) -> str | None:
     """Validate an include= string. Returns an error message or None.
 
-    The events check runs BEFORE the unknown-token check so `include="events,bogus"`
-    surfaces the actionable disabled-events message (user fixes that, next call
-    surfaces the bogus-token error). The generic unknown-value message would
-    otherwise mask the more specific events signal.
+    Unknown tokens surface a generic error listing all accepted values.
     """
     tokens = [t.strip() for t in include.split(",") if t.strip()]
-    accepted_list = ", ".join(sorted(VALID_INCLUDES - {"events"}))
+    accepted_list = ", ".join(sorted(VALID_INCLUDES))
     if not tokens:
-        return (
-            f"Unknown include value(s): '{include}'. Accepted: {accepted_list} (events is temporarily disabled in v1)."
-        )
-    if "events" in tokens:
-        remaining = [t for t in tokens if t != "events"]
-        rest_msg = f" Remaining include values: {', '.join(remaining)}." if remaining else ""
-        return (
-            "The 'events' expander is temporarily disabled in v1 pending an API latency fix. "
-            f"Use the 'get_events' tool directly for 8-K material events.{rest_msg}"
-        )
+        return f"Unknown include value(s): '{include}'. Accepted: {accepted_list}."
     unknown = [t for t in tokens if t not in VALID_INCLUDES]
     if unknown:
-        return (
-            f"Unknown include value(s): {', '.join(unknown)}. Accepted: "
-            f"{accepted_list} (events is temporarily disabled in v1)."
-        )
+        return f"Unknown include value(s): {', '.join(unknown)}. Accepted: {accepted_list}."
     return None
 
 
@@ -226,9 +213,10 @@ def _format_company_header(data: Any, ticker: str, cik: str) -> list[str]:
 @mcp.tool(
     description=(
         "Get company profile plus any combination of sub-resources in one call: financials, ratios, "
-        "insider trades, holders, compensation, board, labor market context, or SBA lending context. "
-        "Pass include='financials,ratios,insider_trades' (comma-separated) to compose exactly what you "
-        "need. Default includes labor_context + lending_context for the company profile view."
+        "insider trades, institutional holders, 8-K corporate events, executive compensation, board, "
+        "labor market context, or SBA lending context. Pass include='financials,ratios,events' "
+        "(comma-separated) to compose exactly what you need. Default includes labor_context + "
+        "lending_context for the company profile view."
     )
 )
 async def get_company(
@@ -336,6 +324,8 @@ def _render_expander(slot_name: str, slot_value: Any) -> list[str]:
         return _format_insider_trades_teaser(slot_value)
     if slot_name == "holders":
         return _format_holders_teaser(slot_value)
+    if slot_name == "events":
+        return _format_events_teaser(slot_value)
     if slot_name == "compensation":
         return _format_compensation_teaser(slot_value)
     if slot_name == "board":
@@ -352,6 +342,7 @@ def _format_expander_error(slot_name: str, error: dict[str, Any]) -> list[str]:
         "ratios": "Ratios",
         "insider_trades": "Insider Trades",
         "holders": "Institutional Holders",
+        "events": "Recent 8-K Events",
         "compensation": "Executive Compensation",
         "board": "Board of Directors",
     }
@@ -482,6 +473,48 @@ def _format_holders_teaser(slot: Any) -> list[str]:
             ]
         )
     lines.append(format_table(["#", "Fund", "Shares", "Value"], rows, alignments=["r", "l", "r", "r"]))
+    return lines
+
+
+def _format_events_teaser(slot: Any) -> list[str]:
+    """Render the top-10 recent 8-K filings as a compact list.
+
+    Each row is a dict with ``filing_accession``, ``filed_at`` (ISO 8601 str or
+    ``None``), ``category`` (one of 9 slugs — pass-through; the renderer does
+    not hardcode the set so API additions surface automatically), and ``items``
+    (list of ``{"code": str, "description": str}``; may be empty). The API
+    already caps the slot at 10 rows; this renderer trusts that contract.
+
+    Per-row defensive guards: ``filed_at`` may be ``None`` or non-string →
+    render ``"unknown date"`` placeholder; ``items=[]`` → render the one-liner
+    with just date + category (no code+description fragment); ``items[0]``
+    missing ``code``/``description`` → fall back to empty strings. The
+    renderer must never crash on one malformed row.
+    """
+    if not isinstance(slot, list):
+        return ["## Recent 8-K Events", "_(unexpected payload shape)_"]
+    lines = ["## Recent 8-K Events"]
+    if not slot:
+        lines.append("_No recent 8-K filings._")
+        return lines
+    for row in slot[:10]:
+        # filed_at: tolerate None / non-string; slice first 10 chars for YYYY-MM-DD.
+        fa_raw = _slot_get(row, "filed_at")
+        fa_str = str(fa_raw) if fa_raw else ""
+        date_part = fa_str[:10] if fa_str else "unknown date"
+        category = str(_slot_get(row, "category", "") or "")
+        items = _slot_get(row, "items", []) or []
+        # items=[]: render date + category alone (no code+description fragment).
+        if items and isinstance(items, list):
+            first = items[0] if isinstance(items[0], dict) else {}
+            code = str(first.get("code", "") or "")
+            description = str(first.get("description", "") or "")
+            if code or description:
+                lines.append(f"- {date_part} · {category} — {code} {description}".rstrip())
+            else:
+                lines.append(f"- {date_part} · {category}")
+        else:
+            lines.append(f"- {date_part} · {category}")
     return lines
 
 
