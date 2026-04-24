@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -340,3 +341,230 @@ class TestGetFinancialMetricIFRSCurrency:
             result = await get_financial_metric("AAPL", "revenue", mock_ctx)
         assert "Currency: USD" in result
         assert any("currency field absent" in rec.message for rec in caplog.records)
+
+
+# --- MCP-25: statement="all" + years kwarg ---
+
+
+def _mcp25_ctx() -> MagicMock:
+    ctx = MagicMock()
+    app = MagicMock()
+    app.client = MagicMock()
+    app.resolver = AsyncMock()
+    app.resolver.resolve = AsyncMock(return_value="0000320193")
+    ctx.request_context.lifespan_context = app
+    return ctx
+
+
+def _mcp25_list_item(year: int, currency: str = "USD", taxonomy: str = "us-gaap") -> MagicMock:
+    m = MagicMock()
+    m.model_extra = {
+        "fiscal_year": year,
+        "currency": currency,
+        "taxonomy": taxonomy,
+        "company": {"cik": "0000320193", "ticker": "AAPL", "name": "Apple Inc."},
+        "line_items": {
+            "revenue": 391_035_000_000,
+            "net_income": 96_995_000_000,
+            "eps_diluted": 6.08,
+        },
+        "filing_accession": f"0000320193-{year % 100:02d}-000081",
+        "metadata": {"source": "ixbrl"},
+    }
+    return m
+
+
+def _mcp25_multi_period(year: int) -> dict:
+    return {
+        "company": {"cik": "0000320193", "ticker": "AAPL", "name": "Apple Inc."},
+        "fiscal_year": year,
+        "period": "annual",
+        "taxonomy": "us-gaap",
+        "currency": "USD",
+        "filing_accession": f"0000320193-{year % 100:02d}-000081",
+        "metadata": {"source": "ixbrl"},
+        "statements": {
+            "income": {"line_items": {"revenue": 391_035_000_000, "net_income": 96_995_000_000}},
+            "balance_sheet": {"line_items": {"total_assets": 364_980_000_000}},
+            "cash_flow": {"line_items": {"operating_cash_flow": 118_000_000_000}},
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_mcp25_years_out_of_range_returns_error() -> None:
+    ctx = _mcp25_ctx()
+    for bad in (0, 11, 99):
+        result = await get_financials("AAPL", ctx, years=bad)
+        assert "years must be between 1 and 10" in result
+
+
+@pytest.mark.asyncio
+async def test_mcp25_years_with_year_returns_mutual_exclusion_error() -> None:
+    ctx = _mcp25_ctx()
+    result = await get_financials("AAPL", ctx, years=5, year=2024)
+    assert "Cannot combine 'years' with" in result
+
+
+@pytest.mark.asyncio
+async def test_mcp25_years_with_quarter_returns_mutual_exclusion_error() -> None:
+    ctx = _mcp25_ctx()
+    result = await get_financials("AAPL", ctx, years=5, period="quarterly", quarter=3)
+    assert "Cannot combine 'years' with" in result
+
+
+@pytest.mark.asyncio
+async def test_mcp25_years_skips_period_quarter_validation() -> None:
+    """years=N skips the period/quarter check — multi-period is the driver, not period.
+    years=5 + period='quarterly' without quarter must NOT surface the misleading
+    "Quarter (1-4) is required" error; the user's intent is multi-period.
+    """
+    ctx = _mcp25_ctx()
+    items = [_mcp25_list_item(2024)]
+    mock_get = AsyncMock(return_value=MagicMock(data=items))
+    ctx.request_context.lifespan_context.client.financials.get = mock_get
+
+    result = await get_financials("AAPL", ctx, years=5, period="quarterly")
+    assert "Quarter (1-4) is required" not in result
+    # Confirms validation didn't short-circuit; the SDK call was made with per_page=5.
+    assert mock_get.call_args.kwargs.get("per_page") == 5
+
+
+@pytest.mark.asyncio
+async def test_mcp25_years_forwards_as_per_page() -> None:
+    ctx = _mcp25_ctx()
+    mock_get = AsyncMock()
+    mock_get.return_value = MagicMock(data=[_mcp25_list_item(2024)])
+    ctx.request_context.lifespan_context.client.financials.get = mock_get
+
+    await get_financials("AAPL", ctx, years=5)
+    assert mock_get.call_args.kwargs.get("per_page") == 5
+
+
+@pytest.mark.asyncio
+async def test_mcp25_statement_all_forwards_to_sdk() -> None:
+    ctx = _mcp25_ctx()
+    mock_get = AsyncMock()
+    mock_get.return_value = MagicMock(model_extra={"data": _mcp25_multi_period(2024)})
+    ctx.request_context.lifespan_context.client.financials.get = mock_get
+
+    await get_financials("AAPL", ctx, statement="all", year=2024)
+    assert mock_get.call_args.kwargs.get("statement") == "all"
+    assert mock_get.call_args.kwargs.get("per_page") is None
+
+
+@pytest.mark.asyncio
+async def test_mcp25_statement_all_with_years_forwards_both() -> None:
+    ctx = _mcp25_ctx()
+    mock_get = AsyncMock()
+    mock_get.return_value = MagicMock(model_extra={"data": [_mcp25_multi_period(y) for y in (2024, 2023, 2022)]})
+    ctx.request_context.lifespan_context.client.financials.get = mock_get
+
+    await get_financials("AAPL", ctx, statement="all", years=3)
+    assert mock_get.call_args.kwargs.get("statement") == "all"
+    assert mock_get.call_args.kwargs.get("per_page") == 3
+
+
+@pytest.mark.asyncio
+async def test_mcp25_statement_all_renders_three_sections() -> None:
+    ctx = _mcp25_ctx()
+    ctx.request_context.lifespan_context.client.financials.get = AsyncMock(
+        return_value=MagicMock(model_extra={"data": _mcp25_multi_period(2024)})
+    )
+    result = await get_financials("AAPL", ctx, statement="all", year=2024)
+    assert "## Income Statement" in result
+    assert "## Balance Sheet" in result
+    assert "## Cash Flow" in result
+    assert "Apple Inc. (AAPL)" in result
+
+
+@pytest.mark.asyncio
+async def test_mcp25_statement_all_missing_cash_flow_renders_not_available() -> None:
+    ctx = _mcp25_ctx()
+    period = _mcp25_multi_period(2024)
+    period["statements"]["cash_flow"] = None
+    ctx.request_context.lifespan_context.client.financials.get = AsyncMock(
+        return_value=MagicMock(model_extra={"data": period})
+    )
+    result = await get_financials("AAPL", ctx, statement="all", year=2024)
+    assert "## Cash Flow" in result
+    assert "(not available" in result
+
+
+@pytest.mark.asyncio
+async def test_mcp25_years_5_renders_wide_table() -> None:
+    ctx = _mcp25_ctx()
+    items = [_mcp25_list_item(y) for y in (2024, 2023, 2022, 2021, 2020)]
+    ctx.request_context.lifespan_context.client.financials.get = AsyncMock(return_value=MagicMock(data=items))
+    result = await get_financials("AAPL", ctx, years=5)
+    assert "History" in result
+    for y in ("2024", "2023", "2020"):
+        assert y in result
+    assert "Revenue" in result  # table cell; wide-table format omits trailing colon
+
+
+@pytest.mark.asyncio
+async def test_mcp25_years_1_renders_history_shape_not_crash() -> None:
+    """years=1 returns a 1-row paginated list. Renders inline as a 1-year history
+    (no delegation to _format_statement, which would crash on extra='allow' fields).
+    """
+    ctx = _mcp25_ctx()
+    items = [_mcp25_list_item(2024)]
+    ctx.request_context.lifespan_context.client.financials.get = AsyncMock(return_value=MagicMock(data=items))
+    result = await get_financials("AAPL", ctx, years=1)
+    assert "History" in result
+    assert "Apple Inc." in result
+    assert "Revenue" in result
+
+
+@pytest.mark.asyncio
+async def test_mcp25_years_currency_drift_note_rendered() -> None:
+    ctx = _mcp25_ctx()
+    items = [
+        _mcp25_list_item(2024, currency="EUR", taxonomy="ifrs-full"),
+        _mcp25_list_item(2023, currency="EUR", taxonomy="ifrs-full"),
+        _mcp25_list_item(2022, currency="USD", taxonomy="us-gaap"),
+    ]
+    ctx.request_context.lifespan_context.client.financials.get = AsyncMock(return_value=MagicMock(data=items))
+    result = await get_financials("AAPL", ctx, years=3)
+    assert "Currency changed" in result
+    assert "Taxonomy changed" in result
+    assert "EUR" in result and "USD" in result
+
+
+@pytest.mark.asyncio
+async def test_mcp25_statement_all_years_renders_three_wide_tables() -> None:
+    ctx = _mcp25_ctx()
+    periods = [_mcp25_multi_period(y) for y in (2024, 2023, 2022)]
+    ctx.request_context.lifespan_context.client.financials.get = AsyncMock(
+        return_value=MagicMock(model_extra={"data": periods})
+    )
+    result = await get_financials("AAPL", ctx, statement="all", years=3)
+    assert "## Income Statement" in result
+    assert "## Balance Sheet" in result
+    assert "## Cash Flow" in result
+    assert "History" in result
+
+
+@pytest.mark.asyncio
+async def test_mcp25_default_mode_unchanged() -> None:
+    """Backwards-compat: calling with no new kwargs produces the legacy shape."""
+    ctx = _mcp25_ctx()
+    data = SimpleNamespace(
+        company=SimpleNamespace(cik="0000320193", ticker="AAPL", name="Apple Inc."),
+        statement="income",
+        period="annual",
+        fiscal_year=2024,
+        fiscal_quarter=None,
+        filing_accession="0000320193-24-000081",
+        currency="USD",
+        taxonomy="us-gaap",
+        line_items={"revenue": 391_035_000_000, "net_income": 96_995_000_000},
+        metadata=SimpleNamespace(source="ixbrl"),
+        reporting_notes=None,
+    )
+    ctx.request_context.lifespan_context.client.financials.get = AsyncMock(return_value=SimpleNamespace(data=data))
+    result = await get_financials("AAPL", ctx)
+    # Legacy shape has "Apple Inc. (AAPL) — Income Statement, FY 2024" — not "History".
+    assert "— Income Statement, FY 2024" in result
+    assert "History" not in result
