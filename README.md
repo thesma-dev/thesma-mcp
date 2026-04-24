@@ -36,6 +36,10 @@ The AI calls `get_occupation_wages` with SOC code 15-1252 and state filter, retu
 
 The AI calls `get_company` for AAPL, which automatically includes BLS labor market context alongside SEC company details.
 
+> "Give me a full picture of Apple — profile, financials, ratios, insider trades, top holders, executive compensation, and board."
+
+The AI calls `get_company('AAPL', include='financials,ratios,insider_trades,holders,compensation,board,labor_context,lending_context')` and returns a composed view in one call instead of eight tool invocations.
+
 ## Installation
 
 ```bash

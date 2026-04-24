@@ -17,7 +17,15 @@ async def test_successful_get(client: Any, mock_api: respx.MockRouter) -> None:
         return_value=httpx.Response(
             200,
             json={
-                "data": [{"cik": "0000320193", "ticker": "AAPL", "name": "Apple Inc.", "company_tier": "sp500"}],
+                "data": [
+                    {
+                        "cik": "0000320193",
+                        "ticker": "AAPL",
+                        "name": "Apple Inc.",
+                        "company_tier": "sp500",
+                        "detail_url": "https://api.thesma.dev/v1/us/sec/companies/0000320193",
+                    }
+                ],
                 "pagination": {"page": 1, "per_page": 25, "total": 1},
             },
         )

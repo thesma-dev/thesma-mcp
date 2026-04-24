@@ -41,6 +41,23 @@ def _format_shares_compact(value: float | int | None) -> str:
     return f"{int(value):,}"
 
 
+def _format_shares_with_slices(trade: Any) -> str:
+    """Format shares with `(N slices)` suffix when the aggregate collapsed 2+ Form 4 rows.
+
+    Defensive against flat-mode rows (pre-T5 ``InsiderTradeListItem`` shape) and
+    legacy cached responses where ``slice_count`` is absent — those render
+    without the suffix, falling through to the plain shares format. The
+    ``isinstance(slice_count, int)`` guard is also what makes MagicMock-based
+    test fixtures (where unset attributes auto-create child mocks) fall through
+    safely instead of raising TypeError on the comparison.
+    """
+    shares_str = _format_shares_compact(trade.shares)
+    slice_count = getattr(trade, "slice_count", None)
+    if isinstance(slice_count, int) and slice_count > 1:
+        return f"{shares_str} ({slice_count} slices)"
+    return shares_str
+
+
 def _format_price(value: float | None) -> str:
     """Format a per-share price."""
     if value is None:
@@ -48,11 +65,37 @@ def _format_price(value: float | None) -> str:
     return f"${value:,.2f}"
 
 
+def _format_price_or_range(trade: Any) -> str:
+    """Render the per-share price as a range when the aggregate spans multiple slices.
+
+    When ``price_range.low < price_range.high`` → ``$171.97–$177.51 (avg $174.89)``.
+    When the range is collapsed (single-slice aggregate, low == high) OR
+    ``price_range`` is absent (flat-mode row or grant aggregate without cash value)
+    → fall back to the weighted-average ``_format_price(price_per_share)`` path.
+    The ``isinstance`` guards keep MagicMock-based test fixtures safe — an
+    auto-created child mock on an unset attribute is not a ``(int, float)``
+    instance, so the function falls through to the weighted-avg path rather
+    than attempting to format a non-numeric ``low`` / ``high`` value.
+    """
+    pr = getattr(trade, "price_range", None)
+    if pr is None:
+        return _format_price(trade.price_per_share)
+    low = getattr(pr, "low", None)
+    high = getattr(pr, "high", None)
+    if not isinstance(low, (int, float)) or not isinstance(high, (int, float)) or low >= high:
+        return _format_price(trade.price_per_share)
+    avg = _format_price(trade.price_per_share) if trade.price_per_share is not None else ""
+    suffix = f" (avg {avg})" if avg else ""
+    return f"${low:,.2f}–${high:,.2f}{suffix}"
+
+
 @mcp.tool(
     description=(
         "Get insider trading transactions (Form 4) — purchases, sales, grants, and option exercises. "
         "Use ticker to scope to one company, or omit to search across all companies. "
-        "Filter by transaction type, minimum value, and date range."
+        "Filter by transaction type, minimum value, and date range. "
+        "By default, rows are aggregated transaction events (same-day 10b5-1 tranches collapsed on "
+        "person/date/type/security/ownership). Pass flat=True for the per-slice Form 4 rows."
     )
 )
 async def get_insider_trades(
@@ -62,6 +105,7 @@ async def get_insider_trades(
     min_value: float | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
+    flat: bool = False,
     limit: int = 20,
 ) -> str:
     """Get insider trading transactions from Form 4."""
@@ -94,7 +138,13 @@ async def get_insider_trades(
         if ticker:
             cik = await app.resolver.resolve(ticker, client=client)
             response = await client.insider_trades.list(  # type: ignore[misc]
-                cik, from_date=from_date, to_date=to_date, trade_type=type, per_page=limit
+                cik,
+                from_date=from_date,
+                to_date=to_date,
+                trade_type=type,
+                min_value=int(min_value) if min_value is not None else None,
+                flat=flat,
+                per_page=limit,
             )
             # Get company info from the first trade if available
             if response.data:
@@ -104,7 +154,14 @@ async def get_insider_trades(
                 company_name = ticker
                 company_ticker = ticker.upper()
         else:
-            response = await client.insider_trades.list_all(from_date=from_date, to_date=to_date, per_page=limit)  # type: ignore[misc]
+            response = await client.insider_trades.list_all(  # type: ignore[misc]
+                from_date=from_date,
+                to_date=to_date,
+                trade_type=type,
+                min_value=int(min_value) if min_value is not None else None,
+                flat=flat,
+                per_page=limit,
+            )
     except ThesmaError as e:
         return str(e)
 
@@ -135,8 +192,8 @@ async def get_insider_trades(
                 str(trade.transaction_date),
                 trade.person.name,
                 _truncate_title(trade.person.title),
-                _format_shares_compact(trade.shares),
-                _format_price(trade.price_per_share),
+                _format_shares_with_slices(trade),
+                _format_price_or_range(trade),
                 format_currency(trade.total_value),
             ]
             for trade in data

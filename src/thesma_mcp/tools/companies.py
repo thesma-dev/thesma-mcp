@@ -129,28 +129,74 @@ def _tier_label(tier: str | None) -> str:
     return mapping.get(tier, tier)
 
 
-@mcp.tool(
-    description=(
-        "Get company details including CIK, SIC code, fiscal year end, and index membership. Accepts ticker or CIK."
-    )
+# MCP-26: ?include= composition primitive — SDK-32 widened the API's include= from
+# 2 values (labor_context, lending_context) to 9. MCP mirrors 8 of them; `events`
+# is pre-rejected because the API disabled the expander in v1 pending a latency fix.
+
+VALID_INCLUDES: frozenset[str] = frozenset(
+    {
+        "labor_context",
+        "lending_context",
+        "financials",
+        "ratios",
+        "events",
+        "insider_trades",
+        "holders",
+        "compensation",
+        "board",
+    }
 )
-async def get_company(ticker: str, ctx: Context[Any, AppContext, Any]) -> str:
-    """Get details for a single company."""
-    app = _get_ctx(ctx)
-    client = get_client(ctx)
 
-    try:
-        cik = await app.resolver.resolve(ticker, client=client)
-    except ThesmaError as e:
-        return str(e)
+# Canonical render order — labor + lending first to preserve pre-MCP-26 section
+# positions for backwards-compat, then financials → ratios → insider_trades →
+# holders → compensation → board. `events` is in VALID_INCLUDES but absent here
+# because it's pre-rejected before rendering ever runs.
+INCLUDE_RENDER_ORDER: list[str] = [
+    "labor_context",
+    "lending_context",
+    "financials",
+    "ratios",
+    "insider_trades",
+    "holders",
+    "compensation",
+    "board",
+]
 
-    try:
-        result = await client.companies.get(cik, include="labor_context,lending_context")  # type: ignore[misc]
-    except ThesmaError as e:
-        return str(e)
+DEFAULT_INCLUDE = "labor_context,lending_context"
 
-    data = result.data
-    # EnrichedCompanyData uses extra="allow", so access via attributes or model_extra
+
+def _validate_include(include: str) -> str | None:
+    """Validate an include= string. Returns an error message or None.
+
+    The events check runs BEFORE the unknown-token check so `include="events,bogus"`
+    surfaces the actionable disabled-events message (user fixes that, next call
+    surfaces the bogus-token error). The generic unknown-value message would
+    otherwise mask the more specific events signal.
+    """
+    tokens = [t.strip() for t in include.split(",") if t.strip()]
+    accepted_list = ", ".join(sorted(VALID_INCLUDES - {"events"}))
+    if not tokens:
+        return (
+            f"Unknown include value(s): '{include}'. Accepted: {accepted_list} (events is temporarily disabled in v1)."
+        )
+    if "events" in tokens:
+        remaining = [t for t in tokens if t != "events"]
+        rest_msg = f" Remaining include values: {', '.join(remaining)}." if remaining else ""
+        return (
+            "The 'events' expander is temporarily disabled in v1 pending an API latency fix. "
+            f"Use the 'get_events' tool directly for 8-K material events.{rest_msg}"
+        )
+    unknown = [t for t in tokens if t not in VALID_INCLUDES]
+    if unknown:
+        return (
+            f"Unknown include value(s): {', '.join(unknown)}. Accepted: "
+            f"{accepted_list} (events is temporarily disabled in v1)."
+        )
+    return None
+
+
+def _format_company_header(data: Any, ticker: str, cik: str) -> list[str]:
+    """Render the CIK / SIC / Index / Exchange / Domicile / Fiscal Year End block."""
     name = getattr(data, "name", "Unknown")
     tkr = getattr(data, "ticker", ticker.upper())
     sic_code = getattr(data, "sic_code", "")
@@ -162,7 +208,7 @@ async def get_company(ticker: str, ctx: Context[Any, AppContext, Any]) -> str:
 
     sic_line = f"{sic_code} — {sic_description}" if sic_description else str(sic_code)
 
-    lines = [
+    return [
         f"{name} ({tkr})",
         "",
         f"{'CIK:':<18}{data_cik}",
@@ -176,31 +222,324 @@ async def get_company(ticker: str, ctx: Context[Any, AppContext, Any]) -> str:
         "Source: SEC EDGAR company registry.",
     ]
 
-    labor_ctx = getattr(data, "labor_context", None)
-    # Also check model_extra for labor_context if not a direct attribute
-    if labor_ctx is None and hasattr(data, "model_extra"):
-        labor_ctx = data.model_extra.get("labor_context")
-    if labor_ctx:
-        lines.append("")
-        # labor_ctx might be a LaborContext model or a dict (from extra="allow")
-        if isinstance(labor_ctx, dict):
-            lines.append(_format_labor_context(labor_ctx))
-        else:
-            lines.append(_format_labor_context_model(labor_ctx))
 
-    lending_ctx = getattr(data, "lending_context", None)
-    if lending_ctx is None and hasattr(data, "model_extra"):
-        model_extra = data.model_extra or {}
-        lending_ctx = model_extra.get("lending_context")
-    # Treat empty dict {} identically to omitted key.
-    if lending_ctx and (not isinstance(lending_ctx, dict) or len(lending_ctx) > 0):
+@mcp.tool(
+    description=(
+        "Get company profile plus any combination of sub-resources in one call: financials, ratios, "
+        "insider trades, holders, compensation, board, labor market context, or SBA lending context. "
+        "Pass include='financials,ratios,insider_trades' (comma-separated) to compose exactly what you "
+        "need. Default includes labor_context + lending_context for the company profile view."
+    )
+)
+async def get_company(
+    ticker: str,
+    ctx: Context[Any, AppContext, Any],
+    include: str | None = None,
+) -> str:
+    """Get details for a single company, optionally composing sub-resources."""
+    app = _get_ctx(ctx)
+    client = get_client(ctx)
+
+    try:
+        cik = await app.resolver.resolve(ticker, client=client)
+    except ThesmaError as e:
+        return str(e)
+
+    # When include is None, fall back to the pre-MCP-26 default for
+    # backwards compatibility (labor_context + lending_context).
+    resolved_include = include if include is not None else DEFAULT_INCLUDE
+    validation_error = _validate_include(resolved_include)
+    if validation_error:
+        return validation_error
+
+    # Tokenize resolved_include into a set BEFORE the render loop. Substring
+    # checking (`slot_name not in resolved_include`) works today by coincidence
+    # (no current include value is a substring of another), but is
+    # correct-by-accident — "ratio" in "ratios", future "boarding" collides with
+    # "board". Set membership is correct-by-construction.
+    requested: set[str] = {t.strip() for t in resolved_include.split(",") if t.strip()}
+
+    try:
+        result = await client.companies.get(cik, include=resolved_include)  # type: ignore[misc]
+    except ThesmaError as e:
+        return str(e)
+
+    data = result.data
+    extra: dict[str, Any] = getattr(data, "model_extra", None) or {}
+
+    lines = _format_company_header(data, ticker, cik)
+
+    for slot_name in INCLUDE_RENDER_ORDER:
+        if slot_name not in requested:
+            continue
+        slot_value = _resolve_slot_value(data, extra, slot_name)
+        if slot_value is None:
+            # Slot was requested but API did not return it. Silently skip —
+            # matches the pre-MCP-26 behavior for labor/lending (the only two
+            # expanders the default include=None path requests). Consumers
+            # who want a "no data" message can request the expander
+            # explicitly and inspect the response text.
+            continue
+        # Partial-failure detection: slot is a dict carrying a typed `error`
+        # sub-dict. The inner isinstance guard defends against a degenerate API
+        # response shape where `error` is a string — calling error.get() on
+        # that would AttributeError in _format_expander_error.
+        if isinstance(slot_value, dict) and "error" in slot_value and isinstance(slot_value["error"], dict):
+            lines.append("")
+            lines.extend(_format_expander_error(slot_name, slot_value["error"]))
+            continue
         lines.append("")
-        if isinstance(lending_ctx, dict):
-            lines.append(_format_lending_context(lending_ctx))
-        else:
-            lines.append(_format_lending_context_model(lending_ctx))
+        lines.extend(_render_expander(slot_name, slot_value))
 
     return "\n".join(lines)
+
+
+def _resolve_slot_value(data: Any, extra: dict[str, Any], slot_name: str) -> Any:
+    """Read an expander slot value from either a typed attribute or model_extra.
+
+    Some sub-objects (labor_context / lending_context) may be emitted as typed
+    attributes by codegen in certain SDK versions; others (financials / ratios /
+    etc.) always live in model_extra. Check typed attribute first, fall back to
+    model_extra. Treat empty dict `{}` as absent for labor/lending to preserve
+    the MCP-24 behaviour.
+    """
+    attr_value = getattr(data, slot_name, None)
+    if attr_value is None:
+        attr_value = extra.get(slot_name)
+    if slot_name in ("labor_context", "lending_context"):
+        if isinstance(attr_value, dict) and not attr_value:
+            return None
+    return attr_value
+
+
+def _render_expander(slot_name: str, slot_value: Any) -> list[str]:
+    """Dispatch to the appropriate per-expander formatter."""
+    if slot_name == "labor_context":
+        rendered = (
+            _format_labor_context(slot_value)
+            if isinstance(slot_value, dict)
+            else _format_labor_context_model(slot_value)
+        )
+        return rendered.splitlines()
+    if slot_name == "lending_context":
+        rendered = (
+            _format_lending_context(slot_value)
+            if isinstance(slot_value, dict)
+            else _format_lending_context_model(slot_value)
+        )
+        return rendered.splitlines()
+    if slot_name == "financials":
+        return _format_financials_teaser(slot_value)
+    if slot_name == "ratios":
+        return _format_ratios_teaser(slot_value)
+    if slot_name == "insider_trades":
+        return _format_insider_trades_teaser(slot_value)
+    if slot_name == "holders":
+        return _format_holders_teaser(slot_value)
+    if slot_name == "compensation":
+        return _format_compensation_teaser(slot_value)
+    if slot_name == "board":
+        return _format_board_teaser(slot_value)
+    return []
+
+
+def _format_expander_error(slot_name: str, error: dict[str, Any]) -> list[str]:
+    """Render a partial-failure error slot with a warning marker."""
+    titles = {
+        "labor_context": "Labor Market Context",
+        "lending_context": "Lending Market Context",
+        "financials": "Financials",
+        "ratios": "Ratios",
+        "insider_trades": "Insider Trades",
+        "holders": "Institutional Holders",
+        "compensation": "Executive Compensation",
+        "board": "Board of Directors",
+    }
+    code = error.get("code", "unknown")
+    message = error.get("message", "Unavailable due to upstream error.")
+    return [
+        f"## {titles.get(slot_name, slot_name)}",
+        f"⚠ Unavailable ({code}): {message}",
+    ]
+
+
+def _slot_get(slot: Any, key: str, default: Any = None) -> Any:
+    """Helper: read a field from a dict slot or a model-like slot."""
+    if isinstance(slot, dict):
+        return slot.get(key, default)
+    return getattr(slot, key, default)
+
+
+def _format_financials_teaser(slot: Any) -> list[str]:
+    """Render the income-statement teaser — 5 income fields + EPS.
+
+    Only income-statement fields (revenue / cost_of_revenue / gross_profit /
+    operating_income / net_income / eps_diluted). Balance-sheet / cash-flow
+    fields are NOT included; the SDK-32 `financials` inline payload is the
+    latest annual income statement, so total_equity / common_shares_outstanding
+    would always be null on this slot.
+    """
+    from thesma_mcp.formatters import format_currency
+
+    line_items = _slot_get(slot, "line_items", {}) or {}
+    currency = _slot_get(slot, "currency", "USD") or "USD"
+    lines = ["## Financials"]
+    rendered_any = False
+    for key, label in (
+        ("revenue", "Revenue"),
+        ("cost_of_revenue", "Cost of Revenue"),
+        ("gross_profit", "Gross Profit"),
+        ("operating_income", "Operating Income"),
+        ("net_income", "Net Income"),
+    ):
+        value = line_items.get(key)
+        if value is None:
+            continue
+        lines.append(f"{label + ':':<20}{format_currency(value)}")
+        rendered_any = True
+    eps = line_items.get("eps_diluted")
+    if eps is not None:
+        lines.append(f"{'EPS (diluted):':<20}{format_currency(eps, decimals=2)}")
+        rendered_any = True
+    if not rendered_any:
+        lines.append("_(no income-statement data in response)_")
+    lines.append(f"Currency: {currency}")
+    return lines
+
+
+def _format_ratios_teaser(slot: Any) -> list[str]:
+    """Render the top-6 ratios as a compact block."""
+    from thesma_mcp.formatters import format_percent
+
+    lines = ["## Ratios"]
+    rendered_any = False
+    for key, label, is_pct in (
+        ("gross_margin", "Gross Margin", True),
+        ("operating_margin", "Operating Margin", True),
+        ("net_margin", "Net Margin", True),
+        ("return_on_equity", "Return on Equity", True),
+        ("debt_to_equity", "Debt-to-Equity", False),
+        ("current_ratio", "Current Ratio", False),
+    ):
+        value = _slot_get(slot, key)
+        if value is None:
+            continue
+        formatted = format_percent(value) if is_pct else f"{value:.2f}"
+        lines.append(f"{label + ':':<20}{formatted}")
+        rendered_any = True
+    if not rendered_any:
+        lines.append("_(no ratios data in response)_")
+    return lines
+
+
+def _format_insider_trades_teaser(slot: Any) -> list[str]:
+    """Render the top-5 insider trades as a compact table."""
+    from thesma_mcp.formatters import format_currency, format_table
+
+    if not isinstance(slot, list):
+        return ["## Insider Trades", "_(unexpected payload shape)_"]
+    lines = ["## Insider Trades"]
+    if not slot:
+        lines.append("_(no recent insider trades)_")
+        return lines
+    rows = []
+    for row in slot[:5]:
+        person = _slot_get(row, "person") or {}
+        person_name = _slot_get(person, "name") or ""
+        date_str = str(_slot_get(row, "transaction_date", ""))
+        trade_type = str(_slot_get(row, "type", "") or "")
+        value = _slot_get(row, "total_value")
+        rows.append([date_str, person_name, trade_type, format_currency(value) if value is not None else "N/A"])
+    lines.append(format_table(["Date", "Person", "Type", "Value"], rows, alignments=["l", "l", "l", "r"]))
+    return lines
+
+
+def _format_holders_teaser(slot: Any) -> list[str]:
+    """Render the top-5 institutional holders + temporal context in the header."""
+    from thesma_mcp.formatters import format_currency, format_number, format_table
+
+    if not isinstance(slot, list):
+        return ["## Institutional Holders", "_(unexpected payload shape)_"]
+    if not slot:
+        return ["## Institutional Holders", "_(no holders in response)_"]
+    # Surface the MCP-24 temporal anchor when rows carry report_quarter.
+    first = slot[0]
+    report_quarter = _slot_get(first, "report_quarter")
+    header = "## Institutional Holders"
+    if report_quarter:
+        header += f" (as of {report_quarter})"
+    lines = [header]
+    rows = []
+    for i, h in enumerate(slot[:5], 1):
+        shares = _slot_get(h, "shares")
+        value = _slot_get(h, "market_value")
+        rows.append(
+            [
+                str(i),
+                _slot_get(h, "fund_name") or "",
+                format_number(shares, decimals=1) if shares is not None else "N/A",
+                format_currency(value) if value is not None else "N/A",
+            ]
+        )
+    lines.append(format_table(["#", "Fund", "Shares", "Value"], rows, alignments=["r", "l", "r", "r"]))
+    return lines
+
+
+def _format_compensation_teaser(slot: Any) -> list[str]:
+    """Render the top-3 NEOs by total compensation + the pay ratio."""
+    from thesma_mcp.formatters import format_currency
+
+    executives = _slot_get(slot, "executives") or []
+    pay_ratio_obj = _slot_get(slot, "pay_ratio")
+    lines = ["## Executive Compensation"]
+    if not executives:
+        lines.append("_(no executives in response)_")
+    else:
+        # Sort by total compensation descending; missing values sink to the bottom.
+        def _total(e: Any) -> float:
+            comp = _slot_get(e, "compensation") or {}
+            total = _slot_get(comp, "total")
+            return float(total) if isinstance(total, (int, float)) else 0.0
+
+        top_three = sorted(executives, key=_total, reverse=True)[:3]
+        for e in top_three:
+            name = _slot_get(e, "name") or "Unknown"
+            title = _slot_get(e, "title") or ""
+            comp = _slot_get(e, "compensation") or {}
+            total = _slot_get(comp, "total")
+            total_str = format_currency(total) if total is not None else "N/A"
+            lines.append(f"- {name} ({title}): {total_str}")
+    if pay_ratio_obj is not None:
+        ratio = _slot_get(pay_ratio_obj, "ratio")
+        if ratio is not None:
+            lines.append(f"CEO-to-Median Pay Ratio: {ratio}:1")
+    return lines
+
+
+def _format_board_teaser(slot: Any) -> list[str]:
+    """Render the board roster (up to 10 members) as a compact table."""
+    from thesma_mcp.formatters import format_table
+
+    members = _slot_get(slot, "members") or []
+    lines = ["## Board of Directors"]
+    if not members:
+        lines.append("_(no board members in response)_")
+        return lines
+    rows = []
+    for m in members[:10]:
+        name = _slot_get(m, "name") or ""
+        is_indep = _slot_get(m, "is_independent")
+        if is_indep is True:
+            indep = "Yes"
+        elif is_indep is False:
+            indep = "No"
+        else:
+            indep = "N/A"
+        committees = _slot_get(m, "committees") or []
+        committees_str = ", ".join(committees) if isinstance(committees, list) else ""
+        rows.append([name, indep, committees_str])
+    lines.append(format_table(["Name", "Independent", "Committees"], rows, alignments=["l", "l", "l"]))
+    return lines
 
 
 def _yoy_indicator(value: float | None) -> str:
@@ -210,6 +549,82 @@ def _yoy_indicator(value: float | None) -> str:
     if value > 0:
         return f"\u25b2 {value:.1f}%"
     return f"\u25bc {abs(value):.1f}%"
+
+
+def _format_summary_model_or_dict(summary: Any) -> list[str] | None:
+    """Render the labor_context.summary derived-classification block.
+
+    Accepts a ``LaborContextSummary`` Pydantic model OR a dict (``extra='allow'``
+    passthrough path). Returns ``None`` when every sub-field is null so the
+    caller can skip the section header entirely — avoids emitting a bare
+    ``**Derived Signals**`` block with no content under it.
+    """
+
+    def _get(attr: str) -> Any:
+        if isinstance(summary, dict):
+            return summary.get(attr)
+        return getattr(summary, attr, None)
+
+    hiring = _get("industry_hiring_trend")
+    unemp = _get("local_unemployment_trend")
+    ratio = _get("comp_to_market_ratio")
+    tightness = _get("labour_market_tightness")
+    if hiring is None and unemp is None and ratio is None and tightness is None:
+        return None
+    lines: list[str] = ["**Derived Signals**"]
+    # Guard with `is not None`, NOT truthiness — the API can return an
+    # empty-string classification label for un-classified cohorts; `if hiring:`
+    # would silently drop those. Matches the `if emp is not None` pattern in
+    # the existing industry / local-market renderers below.
+    if hiring is not None:
+        lines.append(f"- Industry Hiring Trend: {hiring}")
+    if unemp is not None:
+        lines.append(f"- Local Unemployment Trend: {unemp}")
+    if ratio is not None:
+        lines.append(f"- Comp-to-Market Ratio: {ratio:.1f}x")
+    if tightness is not None:
+        # 1.0 ± 0.05 dead band avoids "tight / loose" flipping on trivial
+        # decimal jitter around parity.
+        if tightness >= 1.05:
+            label = "(tight)"
+        elif tightness <= 0.95:
+            label = "(loose)"
+        else:
+            label = ""
+        suffix = f" {label}" if label else ""
+        lines.append(f"- Labour Market Tightness: {tightness:.2f}{suffix}")
+    return lines
+
+
+def _format_data_freshness_model_or_dict(freshness: Any) -> list[str] | None:
+    """Render the labor_context.data_freshness period-anchor block.
+
+    Accepts a ``DataFreshness`` model or dict. Returns ``None`` when all 6
+    period anchors are null so the section is omitted.
+    """
+
+    def _get(attr: str) -> Any:
+        if isinstance(freshness, dict):
+            return freshness.get(attr)
+        return getattr(freshness, attr, None)
+
+    periods = [
+        ("CES", _get("ces_period")),
+        ("QCEW", _get("qcew_period")),
+        ("JOLTS", _get("jolts_period")),
+        ("LAUS", _get("laus_period")),
+        ("OEWS", _get("oews_period")),
+        ("SEC Exec Comp Snapshot", _get("sec_exec_comp_snapshot_date")),
+    ]
+    # Explicit `is not None` — an empty-string period value should still render
+    # so the operator sees the shape rather than a silent suppression.
+    non_null = [(label, val) for label, val in periods if val is not None]
+    if not non_null:
+        return None
+    lines: list[str] = ["**Data Freshness**"]
+    for label, val in non_null:
+        lines.append(f"- {label}: {val}")
+    return lines
 
 
 def _format_labor_context_model(labor_ctx: Any) -> str:
@@ -285,6 +700,23 @@ def _format_labor_context_model(labor_ctx: Any) -> str:
         ratio = getattr(comp, "comp_to_market_ratio", None)
         if ratio is not None:
             sections.append(f"- Company CEO Comp-to-Market: {ratio:.1f}x")
+
+    # MCP-24: post-S3 LaborContext gained `summary` (4 derived classification
+    # labels) and `data_freshness` (6 period anchors). Append both blocks at
+    # the bottom of the labor_context section, after compensation_benchmark.
+    summary = getattr(labor_ctx, "summary", None)
+    if summary is not None:
+        summary_block = _format_summary_model_or_dict(summary)
+        if summary_block is not None:
+            sections.append("")
+            sections.extend(summary_block)
+
+    freshness = getattr(labor_ctx, "data_freshness", None)
+    if freshness is not None:
+        freshness_block = _format_data_freshness_model_or_dict(freshness)
+        if freshness_block is not None:
+            sections.append("")
+            sections.extend(freshness_block)
 
     return "\n".join(sections)
 
@@ -363,6 +795,21 @@ def _format_labor_context(labor_ctx: dict[str, Any]) -> str:
         ratio = comp.get("comp_to_market_ratio")
         if ratio is not None:
             sections.append(f"- Company CEO Comp-to-Market: {ratio:.1f}x")
+
+    # Same summary + data_freshness appends as the model-path twin above.
+    summary = labor_ctx.get("summary")
+    if summary is not None:
+        summary_block = _format_summary_model_or_dict(summary)
+        if summary_block is not None:
+            sections.append("")
+            sections.extend(summary_block)
+
+    freshness = labor_ctx.get("data_freshness")
+    if freshness is not None:
+        freshness_block = _format_data_freshness_model_or_dict(freshness)
+        if freshness_block is not None:
+            sections.append("")
+            sections.extend(freshness_block)
 
     return "\n".join(sections)
 

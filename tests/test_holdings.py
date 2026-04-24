@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -33,6 +34,8 @@ def _make_holder(
     shares: float = 1_250_300_000,
     market_value: float = 286_300_000_000,
     discretion: str = "shared",
+    report_quarter: str = "2025-Q3",
+    filed_at: datetime | None = None,
 ) -> MagicMock:
     m = MagicMock()
     m.fund_name = fund_name
@@ -41,6 +44,9 @@ def _make_holder(
     disc = MagicMock()
     disc.value = discretion
     m.discretion = disc
+    # SDK-29 added required report_quarter + filed_at fields post-Wave-1.
+    m.report_quarter = report_quarter
+    m.filed_at = filed_at if filed_at is not None else datetime(2025, 11, 14, 16, 30, tzinfo=UTC)
     return m
 
 
@@ -49,12 +55,16 @@ def _make_fund_holding(
     held_company_ticker: str = "AAPL",
     shares: float = 400_000_000,
     market_value: float = 91_600_000_000,
+    report_quarter: str = "2025-Q3",
+    filed_at: datetime | None = None,
 ) -> MagicMock:
     m = MagicMock()
     m.held_company_name = held_company_name
     m.held_company_ticker = held_company_ticker
     m.shares = shares
     m.market_value = market_value
+    m.report_quarter = report_quarter
+    m.filed_at = filed_at if filed_at is not None else datetime(2025, 11, 14, 16, 30, tzinfo=UTC)
     return m
 
 
@@ -177,6 +187,59 @@ class TestGetInstitutionalHolders:
         result = await get_institutional_holders("AAPL", ctx)
         assert "No institutional holders" in result
 
+    # --- MCP-24: SDK-29 temporal surfacing ---
+
+    async def test_surfaces_report_quarter_from_row(self) -> None:
+        """report_quarter + filed_at are read from the row, not the user input."""
+        ctx = _make_ctx()
+        holders = [_make_holder()]  # default report_quarter="2025-Q3"
+        resp = _make_paginated_response(holders, total=1)
+        ctx.request_context.lifespan_context.client.holdings.holders = AsyncMock(return_value=resp)
+
+        result = await get_institutional_holders("AAPL", ctx)
+        assert "Holdings as of 2025-Q3" in result
+        assert "most recent filing submitted 2025-11-14" in result
+
+    async def test_row_quarter_wins_over_user_input(self) -> None:
+        """Row's report_quarter wins over the user's quarter kwarg (row is authoritative)."""
+        ctx = _make_ctx()
+        holders = [_make_holder(report_quarter="2025-Q3")]
+        resp = _make_paginated_response(holders, total=1)
+        ctx.request_context.lifespan_context.client.holdings.holders = AsyncMock(return_value=resp)
+
+        result = await get_institutional_holders("AAPL", ctx, quarter="2024-Q4")
+        assert "Holdings as of 2025-Q3" in result
+        assert "2024-Q4" not in result
+
+    async def test_most_recent_filed_at_max_reduction(self) -> None:
+        """Footer filed_at picks the MAX across all rows (not first-row)."""
+        ctx = _make_ctx()
+        holders = [
+            _make_holder(filed_at=datetime(2025, 11, 7, 0, 0, tzinfo=UTC)),
+            _make_holder(filed_at=datetime(2025, 11, 14, 16, 30, tzinfo=UTC)),
+            _make_holder(filed_at=datetime(2025, 11, 1, 0, 0, tzinfo=UTC)),
+        ]
+        resp = _make_paginated_response(holders, total=3)
+        ctx.request_context.lifespan_context.client.holdings.holders = AsyncMock(return_value=resp)
+
+        result = await get_institutional_holders("AAPL", ctx)
+        assert "most recent filing submitted 2025-11-14" in result
+
+    async def test_filed_at_normalizes_non_utc_offset(self) -> None:
+        """Non-UTC aware datetime is converted to UTC before `.date()` is taken."""
+        from datetime import timedelta
+
+        ctx = _make_ctx()
+        # 2025-11-14 23:30 at UTC-05:00 is already 2025-11-15 04:30 UTC.
+        pacific_offset = timezone(timedelta(hours=-5))
+        holders = [_make_holder(filed_at=datetime(2025, 11, 14, 23, 30, tzinfo=pacific_offset))]
+        resp = _make_paginated_response(holders, total=1)
+        ctx.request_context.lifespan_context.client.holdings.holders = AsyncMock(return_value=resp)
+
+        result = await get_institutional_holders("AAPL", ctx)
+        # Should be 2025-11-15 (UTC day), not 2025-11-14 (local day).
+        assert "most recent filing submitted 2025-11-15" in result
+
 
 class TestGetFundHoldings:
     async def test_resolves_fund_name(self) -> None:
@@ -216,6 +279,19 @@ class TestGetFundHoldings:
         result = await get_fund_holdings("Berkshire", ctx)
         assert "No holdings found" in result
 
+    async def test_surfaces_report_quarter_and_filed_at(self) -> None:
+        """get_fund_holdings mirrors the MCP-24 temporal surfacing pattern."""
+        ctx = _make_ctx()
+        fund_resp = _make_paginated_response([_make_fund()])
+        ctx.request_context.lifespan_context.client.holdings.funds = AsyncMock(return_value=fund_resp)
+        holdings = [_make_fund_holding()]
+        holdings_resp = _make_paginated_response(holdings, total=42)
+        ctx.request_context.lifespan_context.client.holdings.fund_holdings = AsyncMock(return_value=holdings_resp)
+
+        result = await get_fund_holdings("Berkshire Hathaway", ctx)
+        assert "Holdings as of 2025-Q3" in result
+        assert "most recent filing submitted 2025-11-14" in result
+
 
 class TestGetHoldingChanges:
     async def test_by_ticker(self) -> None:
@@ -254,6 +330,24 @@ class TestGetHoldingChanges:
         ctx = _make_ctx()
         result = await get_holding_changes(ctx, ticker="AAPL", fund_name="Berkshire")
         assert "Provide exactly one" in result
+
+    async def test_unchanged_by_mcp24(self) -> None:
+        """MCP-24 scope boundary: holding_changes does NOT get the temporal-surfacing
+        treatment. CompanyPositionChange / FundPositionChange are derived delta rows,
+        not raw 13F rows — they lack report_quarter / filed_at on the SDK side.
+        """
+        ctx = _make_ctx()
+        changes = [_make_company_position_change()]
+        resp = _make_paginated_response(changes, total=1)
+        ctx.request_context.lifespan_context.client.holdings.holder_changes = AsyncMock(return_value=resp)
+
+        result = await get_holding_changes(ctx, ticker="AAPL")
+        # Existing "Position Changes, <quarter>" title format is preserved; the new
+        # "Holdings as of ..." / "most recent filing submitted ..." lines are NOT
+        # rendered on the holding-changes code path.
+        assert "Position Changes, 2024-Q3" in result
+        assert "Holdings as of" not in result
+        assert "most recent filing submitted" not in result
 
     async def test_no_changes(self) -> None:
         """get_holding_changes with no changes returns helpful message."""

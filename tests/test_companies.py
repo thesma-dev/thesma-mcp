@@ -9,7 +9,10 @@ import pytest
 from thesma.errors import ThesmaError
 
 from thesma_mcp.tools.companies import (
+    _format_data_freshness_model_or_dict,
     _format_labor_context,
+    _format_labor_context_model,
+    _format_summary_model_or_dict,
     _parse_exchange,
     _render_exchange,
     get_company,
@@ -275,6 +278,233 @@ class TestFormatLaborContext:
         assert "\u25b2" not in result
         assert "\u25bc" not in result
         assert "500.0" in result
+
+
+# --- MCP-24: SDK-28 LaborContext.summary + data_freshness blocks ---
+
+
+class TestLaborContextDerivedSignalsBlock:
+    """Tests for `_format_summary_model_or_dict` — the new `**Derived Signals**` block
+    appended to labor_context rendering by MCP-24.
+    """
+
+    def test_renders_all_four_fields_from_dict(self) -> None:
+        lines = _format_summary_model_or_dict(
+            {
+                "industry_hiring_trend": "accelerating",
+                "local_unemployment_trend": "improving",
+                "comp_to_market_ratio": 1.12,
+                "labour_market_tightness": 1.30,
+            }
+        )
+        assert lines is not None
+        rendered = "\n".join(lines)
+        assert "**Derived Signals**" in rendered
+        assert "Industry Hiring Trend: accelerating" in rendered
+        assert "Local Unemployment Trend: improving" in rendered
+        assert "Comp-to-Market Ratio: 1.1x" in rendered
+        assert "Labour Market Tightness: 1.30 (tight)" in rendered
+
+    def test_renders_from_model_path(self) -> None:
+        """Model-path (Pydantic-typed labor_context.summary) renders identically."""
+        from types import SimpleNamespace
+
+        summary = SimpleNamespace(
+            industry_hiring_trend="declining",
+            local_unemployment_trend=None,
+            comp_to_market_ratio=0.85,
+            labour_market_tightness=0.70,
+        )
+        lines = _format_summary_model_or_dict(summary)
+        assert lines is not None
+        rendered = "\n".join(lines)
+        assert "Industry Hiring Trend: declining" in rendered
+        assert "Comp-to-Market Ratio: 0.8x" in rendered
+        assert "Labour Market Tightness: 0.70 (loose)" in rendered
+        # Null local_unemployment_trend is suppressed entirely
+        assert "Local Unemployment Trend" not in rendered
+
+    def test_suppresses_block_when_all_null(self) -> None:
+        """All-null summary returns None so the caller can skip the header."""
+        lines = _format_summary_model_or_dict(
+            {
+                "industry_hiring_trend": None,
+                "local_unemployment_trend": None,
+                "comp_to_market_ratio": None,
+                "labour_market_tightness": None,
+            }
+        )
+        assert lines is None
+
+    def test_labour_market_tightness_bucket_balanced_no_suffix(self) -> None:
+        """Tightness in the 1.0 ± 0.05 dead band gets no `(tight)` / `(loose)` suffix."""
+        lines = _format_summary_model_or_dict({"labour_market_tightness": 1.00})
+        assert lines is not None
+        rendered = "\n".join(lines)
+        assert "Labour Market Tightness: 1.00" in rendered
+        assert "(tight)" not in rendered
+        assert "(loose)" not in rendered
+
+    def test_empty_string_hiring_trend_still_renders(self) -> None:
+        """Classification label of "" should render, not be silently suppressed."""
+        lines = _format_summary_model_or_dict({"industry_hiring_trend": ""})
+        assert lines is not None
+        rendered = "\n".join(lines)
+        # The empty-string value produces a "Industry Hiring Trend: " line —
+        # the operator sees the shape rather than a silent suppression.
+        assert "Industry Hiring Trend:" in rendered
+
+
+class TestDataFreshnessBlock:
+    """Tests for `_format_data_freshness_model_or_dict`."""
+
+    def test_renders_all_six_periods(self) -> None:
+        lines = _format_data_freshness_model_or_dict(
+            {
+                "ces_period": "2025-11",
+                "qcew_period": "2025-Q2",
+                "jolts_period": "2025-10",
+                "laus_period": "2025-11",
+                "oews_period": "2024",
+                "sec_exec_comp_snapshot_date": "2025-03-15",
+            }
+        )
+        assert lines is not None
+        rendered = "\n".join(lines)
+        assert "**Data Freshness**" in rendered
+        assert "CES: 2025-11" in rendered
+        assert "QCEW: 2025-Q2" in rendered
+        assert "JOLTS: 2025-10" in rendered
+        assert "LAUS: 2025-11" in rendered
+        assert "OEWS: 2024" in rendered
+        assert "SEC Exec Comp Snapshot: 2025-03-15" in rendered
+
+    def test_renders_partial(self) -> None:
+        lines = _format_data_freshness_model_or_dict(
+            {
+                "ces_period": "2025-11",
+                "qcew_period": None,
+                "jolts_period": None,
+                "laus_period": None,
+                "oews_period": None,
+                "sec_exec_comp_snapshot_date": None,
+            }
+        )
+        assert lines is not None
+        rendered = "\n".join(lines)
+        assert "CES: 2025-11" in rendered
+        assert "QCEW" not in rendered
+        assert "JOLTS" not in rendered
+
+    def test_suppresses_block_when_all_null(self) -> None:
+        lines = _format_data_freshness_model_or_dict(
+            {
+                "ces_period": None,
+                "qcew_period": None,
+                "jolts_period": None,
+                "laus_period": None,
+                "oews_period": None,
+                "sec_exec_comp_snapshot_date": None,
+            }
+        )
+        assert lines is None
+
+
+class TestLaborContextAppendsSummaryAndFreshness:
+    """Integration: `_format_labor_context` (dict) and `_format_labor_context_model`
+    (model) both append the new blocks at the bottom of the labor_context section.
+    """
+
+    def test_dict_path_appends_both_blocks(self) -> None:
+        rendered = _format_labor_context(
+            {
+                "industry": {"naics_code": "5112", "naics_description": "Software"},
+                "summary": {
+                    "industry_hiring_trend": "stable",
+                    "comp_to_market_ratio": 1.12,
+                },
+                "data_freshness": {
+                    "ces_period": "2025-11",
+                    "oews_period": "2024",
+                },
+            }
+        )
+        # Existing industry block still renders first; new blocks append below.
+        assert rendered.index("## Labor Market Context") < rendered.index("**Derived Signals**")
+        assert rendered.index("**Derived Signals**") < rendered.index("**Data Freshness**")
+        assert "CES: 2025-11" in rendered
+
+    def test_comp_to_market_ratio_appears_in_both_blocks(self) -> None:
+        """Intentional duplication per MCP-24 Architecture Decision #7: comp_to_market_ratio
+        renders once in CEO Compensation Benchmark (alongside wage percentiles) AND once in
+        Derived Signals (alongside other classification labels).
+        """
+        rendered = _format_labor_context(
+            {
+                "compensation_benchmark": {
+                    "soc_code": "11-1011",
+                    "soc_title": "Chief Executives",
+                    "market_median_annual_wage": 250000,
+                    "comp_to_market_ratio": 1.12,
+                },
+                "summary": {"comp_to_market_ratio": 1.12},
+            }
+        )
+        # Derived Signals form
+        assert "Comp-to-Market Ratio: 1.1x" in rendered
+        # CEO Compensation Benchmark form (distinct label)
+        assert "Company CEO Comp-to-Market: 1.1x" in rendered
+
+    def test_model_path_appends_both_blocks(self) -> None:
+        from types import SimpleNamespace
+
+        labor_ctx = SimpleNamespace(
+            industry=SimpleNamespace(
+                naics_code="5112",
+                naics_description="Software",
+                total_employment_thousands=None,
+                employment_yoy_pct=None,
+                avg_hourly_earnings=None,
+                earnings_yoy_pct=None,
+            ),
+            local_market=None,
+            compensation_benchmark=None,
+            summary=SimpleNamespace(
+                industry_hiring_trend="accelerating",
+                local_unemployment_trend=None,
+                comp_to_market_ratio=None,
+                labour_market_tightness=None,
+            ),
+            data_freshness=SimpleNamespace(
+                ces_period="2025-11",
+                qcew_period=None,
+                jolts_period=None,
+                laus_period=None,
+                oews_period=None,
+                sec_exec_comp_snapshot_date=None,
+            ),
+        )
+        rendered = _format_labor_context_model(labor_ctx)
+        assert "**Derived Signals**" in rendered
+        assert "**Data Freshness**" in rendered
+        assert "CES: 2025-11" in rendered
+
+    def test_missing_summary_and_freshness_does_not_crash(self) -> None:
+        """Backwards-compat: labor_context without the new sub-objects renders unchanged."""
+        rendered = _format_labor_context(
+            {
+                "industry": {
+                    "naics_code": "5112",
+                    "naics_description": "Software",
+                    "total_employment_thousands": 500.0,
+                    "employment_yoy_pct": 2.3,
+                },
+            }
+        )
+        assert "**Derived Signals**" not in rendered
+        assert "**Data Freshness**" not in rendered
+        # Existing industry rendering is preserved.
+        assert "500.0" in rendered
 
 
 class TestSearchCompaniesExchangeDomicile:
@@ -778,3 +1008,272 @@ class TestGetCompanyLendingContext:
         await get_company("AAPL", mock_ctx)
         kwargs = get_mock.await_args.kwargs
         assert kwargs.get("include") == "labor_context,lending_context"
+
+
+# --- MCP-26: include composition primitive (8 values, events disabled in v1) ---
+
+
+def _make_composed_response(extras: dict[str, Any]) -> Any:
+    """Build a DataResponse-like object where inline expander payloads live in model_extra."""
+    from types import SimpleNamespace
+
+    data = SimpleNamespace(
+        cik="0000320193",
+        ticker="AAPL",
+        name="Apple Inc.",
+        sic_code="3571",
+        sic_description="Electronic Computers",
+        company_tier=SimpleNamespace(value="sp500"),
+        fiscal_year_end="September (0930)",
+        exchange=None,
+        domicile=None,
+        model_extra=extras,
+    )
+    return SimpleNamespace(data=data)
+
+
+class TestGetCompanyIncludeValidation:
+    async def test_unknown_include_value_returns_error(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        result = await get_company("AAPL", mock_ctx, include="bogus")
+        assert "Unknown include value(s): bogus" in result
+
+    async def test_events_alone_returns_disabled_message(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        result = await get_company("AAPL", mock_ctx, include="events")
+        assert "temporarily disabled" in result
+        assert "get_events" in result
+
+    async def test_events_in_combination_returns_disabled_message(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        result = await get_company("AAPL", mock_ctx, include="financials,events,ratios")
+        assert "temporarily disabled" in result
+        # Remaining values listed in the message
+        assert "financials" in result
+        assert "ratios" in result
+
+    async def test_events_wins_over_unknown_when_both_present(self, mock_ctx: MagicMock) -> None:
+        """events check runs before unknown-token check — the more actionable
+        message fires first.
+        """
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        result = await get_company("AAPL", mock_ctx, include="events,bogus")
+        assert "temporarily disabled" in result
+
+    async def test_empty_include_returns_error(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        result = await get_company("AAPL", mock_ctx, include=",,")
+        assert "Unknown include value(s)" in result
+
+
+class TestGetCompanyIncludeForwarding:
+    async def test_default_include_preserves_legacy_behaviour(self, mock_ctx: MagicMock) -> None:
+        """Backwards-compat: include=None forwards labor_context,lending_context."""
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        mock_get = AsyncMock(return_value=_make_composed_response({}))
+        app.client.companies.get = mock_get
+        await get_company("AAPL", mock_ctx)
+        assert mock_get.call_args.kwargs.get("include") == "labor_context,lending_context"
+
+    async def test_include_forwarded_verbatim(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        mock_get = AsyncMock(return_value=_make_composed_response({}))
+        app.client.companies.get = mock_get
+        await get_company("AAPL", mock_ctx, include="financials,ratios")
+        assert mock_get.call_args.kwargs.get("include") == "financials,ratios"
+
+
+class TestGetCompanyRendersInCanonicalOrder:
+    async def test_sections_rendered_in_canonical_order_regardless_of_input(self, mock_ctx: MagicMock) -> None:
+        """User passes board,financials,labor_context — output renders in
+        canonical (labor → financials → board) order.
+        """
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        extras = {
+            "labor_context": {"industry": {"naics_code": "334111"}},
+            "financials": {"line_items": {"revenue": 391_035_000_000}, "currency": "USD"},
+            "board": {"members": [{"name": "Arthur Levinson", "is_independent": True, "committees": []}]},
+        }
+        app.client.companies.get = AsyncMock(return_value=_make_composed_response(extras))
+        result = await get_company("AAPL", mock_ctx, include="board,financials,labor_context")
+        idx_labor = result.index("## Labor Market Context")
+        idx_fin = result.index("## Financials")
+        idx_board = result.index("## Board of Directors")
+        assert idx_labor < idx_fin < idx_board
+
+
+class TestGetCompanyPerExpanderTeasers:
+    async def test_financials_teaser(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        extras = {
+            "financials": {
+                "line_items": {
+                    "revenue": 391_035_000_000,
+                    "gross_profit": 173_535_000_000,
+                    "net_income": 96_995_000_000,
+                    "eps_diluted": 6.08,
+                },
+                "currency": "USD",
+            }
+        }
+        app.client.companies.get = AsyncMock(return_value=_make_composed_response(extras))
+        result = await get_company("AAPL", mock_ctx, include="financials")
+        assert "## Financials" in result
+        assert "Revenue:" in result
+        assert "Gross Profit:" in result
+        assert "Net Income:" in result
+        assert "Currency: USD" in result
+
+    async def test_ratios_teaser(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        extras = {
+            "ratios": {
+                "gross_margin": 46.2,
+                "operating_margin": 31.5,
+                "net_margin": 26.4,
+                "return_on_equity": 1.65,
+                "debt_to_equity": 1.87,
+                "current_ratio": 0.95,
+            }
+        }
+        app.client.companies.get = AsyncMock(return_value=_make_composed_response(extras))
+        result = await get_company("AAPL", mock_ctx, include="ratios")
+        assert "## Ratios" in result
+        assert "Gross Margin" in result
+        assert "Debt-to-Equity" in result
+
+    async def test_insider_trades_teaser(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        extras = {
+            "insider_trades": [
+                {
+                    "person": {"name": "Kress Colette"},
+                    "transaction_date": "2026-03-20",
+                    "type": "sale",
+                    "total_value": 13_120_000.00,
+                }
+            ]
+        }
+        app.client.companies.get = AsyncMock(return_value=_make_composed_response(extras))
+        result = await get_company("AAPL", mock_ctx, include="insider_trades")
+        assert "## Insider Trades" in result
+        assert "Kress Colette" in result
+        assert "2026-03-20" in result
+
+    async def test_holders_teaser_surfaces_report_quarter(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        extras = {
+            "holders": [
+                {
+                    "fund_name": "Vanguard Group Inc",
+                    "shares": 1_200_000_000,
+                    "market_value": 180_000_000_000,
+                    "report_quarter": "2025-Q3",
+                }
+            ]
+        }
+        app.client.companies.get = AsyncMock(return_value=_make_composed_response(extras))
+        result = await get_company("AAPL", mock_ctx, include="holders")
+        assert "## Institutional Holders" in result
+        assert "as of 2025-Q3" in result
+        assert "Vanguard" in result
+
+    async def test_compensation_teaser(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        extras = {
+            "compensation": {
+                "executives": [
+                    {"name": "Tim Cook", "title": "CEO", "compensation": {"total": 63_200_000}},
+                    {"name": "Luca Maestri", "title": "CFO", "compensation": {"total": 25_000_000}},
+                ],
+                "pay_ratio": {"ratio": 1447},
+            }
+        }
+        app.client.companies.get = AsyncMock(return_value=_make_composed_response(extras))
+        result = await get_company("AAPL", mock_ctx, include="compensation")
+        assert "## Executive Compensation" in result
+        assert "Tim Cook" in result
+        assert "1447" in result
+
+    async def test_board_teaser(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        extras = {
+            "board": {
+                "members": [
+                    {
+                        "name": "Arthur Levinson",
+                        "is_independent": True,
+                        "committees": ["Compensation"],
+                    }
+                ]
+            }
+        }
+        app.client.companies.get = AsyncMock(return_value=_make_composed_response(extras))
+        result = await get_company("AAPL", mock_ctx, include="board")
+        assert "## Board of Directors" in result
+        assert "Arthur Levinson" in result
+
+    async def test_empty_insider_trades_list_renders_note(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        app.client.companies.get = AsyncMock(return_value=_make_composed_response({"insider_trades": []}))
+        result = await get_company("AAPL", mock_ctx, include="insider_trades")
+        assert "## Insider Trades" in result
+        assert "no recent insider trades" in result
+
+
+class TestGetCompanyPartialFailure:
+    async def test_error_slot_renders_warning(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        extras = {"holders": {"error": {"code": "upstream_timeout", "message": "holders did not complete within 3.0s"}}}
+        app.client.companies.get = AsyncMock(return_value=_make_composed_response(extras))
+        result = await get_company("AAPL", mock_ctx, include="holders")
+        assert "## Institutional Holders" in result
+        assert "⚠" in result
+        assert "upstream_timeout" in result
+        assert "did not complete" in result
+
+    async def test_mixed_success_and_error(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        extras = {
+            "financials": {"line_items": {"revenue": 391_035_000_000}, "currency": "USD"},
+            "holders": {"error": {"code": "upstream_timeout", "message": "timeout"}},
+        }
+        app.client.companies.get = AsyncMock(return_value=_make_composed_response(extras))
+        result = await get_company("AAPL", mock_ctx, include="financials,holders")
+        # Both sections present — no short-circuit on first failure
+        assert "## Financials" in result
+        assert "Revenue:" in result
+        assert "## Institutional Holders" in result
+        assert "⚠" in result
+
+    async def test_string_valued_error_falls_through_safely(self, mock_ctx: MagicMock) -> None:
+        """Degenerate API response: error is a string, not a dict. The inner
+        isinstance guard prevents _format_expander_error from crashing on
+        error.get("code") and falls through to the inline-payload path.
+        """
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        extras = {"holders": {"error": "unexpected string shape"}}
+        app.client.companies.get = AsyncMock(return_value=_make_composed_response(extras))
+        result = await get_company("AAPL", mock_ctx, include="holders")
+        # Should not crash; _render_expander's holders path handles the dict
+        # (even though the shape is unexpected — the teaser formatter's
+        # `isinstance(slot, list)` guard kicks in).
+        assert "## Institutional Holders" in result
