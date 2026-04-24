@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "thesma-mcp"
-version = "0.10.0.0"
+version = "0.10.0.2"
 description = "MCP server for SEC, BLS, and US Census data — give your AI assistant native access to financials, labor market stats, and demographics"
 readme = "README.md"
 license = {text = "MIT"}

@@ -1008,3 +1008,272 @@ class TestGetCompanyLendingContext:
         await get_company("AAPL", mock_ctx)
         kwargs = get_mock.await_args.kwargs
         assert kwargs.get("include") == "labor_context,lending_context"
+
+
+# --- MCP-26: include composition primitive (8 values, events disabled in v1) ---
+
+
+def _make_composed_response(extras: dict[str, Any]) -> Any:
+    """Build a DataResponse-like object where inline expander payloads live in model_extra."""
+    from types import SimpleNamespace
+
+    data = SimpleNamespace(
+        cik="0000320193",
+        ticker="AAPL",
+        name="Apple Inc.",
+        sic_code="3571",
+        sic_description="Electronic Computers",
+        company_tier=SimpleNamespace(value="sp500"),
+        fiscal_year_end="September (0930)",
+        exchange=None,
+        domicile=None,
+        model_extra=extras,
+    )
+    return SimpleNamespace(data=data)
+
+
+class TestGetCompanyIncludeValidation:
+    async def test_unknown_include_value_returns_error(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        result = await get_company("AAPL", mock_ctx, include="bogus")
+        assert "Unknown include value(s): bogus" in result
+
+    async def test_events_alone_returns_disabled_message(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        result = await get_company("AAPL", mock_ctx, include="events")
+        assert "temporarily disabled" in result
+        assert "get_events" in result
+
+    async def test_events_in_combination_returns_disabled_message(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        result = await get_company("AAPL", mock_ctx, include="financials,events,ratios")
+        assert "temporarily disabled" in result
+        # Remaining values listed in the message
+        assert "financials" in result
+        assert "ratios" in result
+
+    async def test_events_wins_over_unknown_when_both_present(self, mock_ctx: MagicMock) -> None:
+        """events check runs before unknown-token check — the more actionable
+        message fires first.
+        """
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        result = await get_company("AAPL", mock_ctx, include="events,bogus")
+        assert "temporarily disabled" in result
+
+    async def test_empty_include_returns_error(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        result = await get_company("AAPL", mock_ctx, include=",,")
+        assert "Unknown include value(s)" in result
+
+
+class TestGetCompanyIncludeForwarding:
+    async def test_default_include_preserves_legacy_behaviour(self, mock_ctx: MagicMock) -> None:
+        """Backwards-compat: include=None forwards labor_context,lending_context."""
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        mock_get = AsyncMock(return_value=_make_composed_response({}))
+        app.client.companies.get = mock_get
+        await get_company("AAPL", mock_ctx)
+        assert mock_get.call_args.kwargs.get("include") == "labor_context,lending_context"
+
+    async def test_include_forwarded_verbatim(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        mock_get = AsyncMock(return_value=_make_composed_response({}))
+        app.client.companies.get = mock_get
+        await get_company("AAPL", mock_ctx, include="financials,ratios")
+        assert mock_get.call_args.kwargs.get("include") == "financials,ratios"
+
+
+class TestGetCompanyRendersInCanonicalOrder:
+    async def test_sections_rendered_in_canonical_order_regardless_of_input(self, mock_ctx: MagicMock) -> None:
+        """User passes board,financials,labor_context — output renders in
+        canonical (labor → financials → board) order.
+        """
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        extras = {
+            "labor_context": {"industry": {"naics_code": "334111"}},
+            "financials": {"line_items": {"revenue": 391_035_000_000}, "currency": "USD"},
+            "board": {"members": [{"name": "Arthur Levinson", "is_independent": True, "committees": []}]},
+        }
+        app.client.companies.get = AsyncMock(return_value=_make_composed_response(extras))
+        result = await get_company("AAPL", mock_ctx, include="board,financials,labor_context")
+        idx_labor = result.index("## Labor Market Context")
+        idx_fin = result.index("## Financials")
+        idx_board = result.index("## Board of Directors")
+        assert idx_labor < idx_fin < idx_board
+
+
+class TestGetCompanyPerExpanderTeasers:
+    async def test_financials_teaser(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        extras = {
+            "financials": {
+                "line_items": {
+                    "revenue": 391_035_000_000,
+                    "gross_profit": 173_535_000_000,
+                    "net_income": 96_995_000_000,
+                    "eps_diluted": 6.08,
+                },
+                "currency": "USD",
+            }
+        }
+        app.client.companies.get = AsyncMock(return_value=_make_composed_response(extras))
+        result = await get_company("AAPL", mock_ctx, include="financials")
+        assert "## Financials" in result
+        assert "Revenue:" in result
+        assert "Gross Profit:" in result
+        assert "Net Income:" in result
+        assert "Currency: USD" in result
+
+    async def test_ratios_teaser(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        extras = {
+            "ratios": {
+                "gross_margin": 46.2,
+                "operating_margin": 31.5,
+                "net_margin": 26.4,
+                "return_on_equity": 1.65,
+                "debt_to_equity": 1.87,
+                "current_ratio": 0.95,
+            }
+        }
+        app.client.companies.get = AsyncMock(return_value=_make_composed_response(extras))
+        result = await get_company("AAPL", mock_ctx, include="ratios")
+        assert "## Ratios" in result
+        assert "Gross Margin" in result
+        assert "Debt-to-Equity" in result
+
+    async def test_insider_trades_teaser(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        extras = {
+            "insider_trades": [
+                {
+                    "person": {"name": "Kress Colette"},
+                    "transaction_date": "2026-03-20",
+                    "type": "sale",
+                    "total_value": 13_120_000.00,
+                }
+            ]
+        }
+        app.client.companies.get = AsyncMock(return_value=_make_composed_response(extras))
+        result = await get_company("AAPL", mock_ctx, include="insider_trades")
+        assert "## Insider Trades" in result
+        assert "Kress Colette" in result
+        assert "2026-03-20" in result
+
+    async def test_holders_teaser_surfaces_report_quarter(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        extras = {
+            "holders": [
+                {
+                    "fund_name": "Vanguard Group Inc",
+                    "shares": 1_200_000_000,
+                    "market_value": 180_000_000_000,
+                    "report_quarter": "2025-Q3",
+                }
+            ]
+        }
+        app.client.companies.get = AsyncMock(return_value=_make_composed_response(extras))
+        result = await get_company("AAPL", mock_ctx, include="holders")
+        assert "## Institutional Holders" in result
+        assert "as of 2025-Q3" in result
+        assert "Vanguard" in result
+
+    async def test_compensation_teaser(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        extras = {
+            "compensation": {
+                "executives": [
+                    {"name": "Tim Cook", "title": "CEO", "compensation": {"total": 63_200_000}},
+                    {"name": "Luca Maestri", "title": "CFO", "compensation": {"total": 25_000_000}},
+                ],
+                "pay_ratio": {"ratio": 1447},
+            }
+        }
+        app.client.companies.get = AsyncMock(return_value=_make_composed_response(extras))
+        result = await get_company("AAPL", mock_ctx, include="compensation")
+        assert "## Executive Compensation" in result
+        assert "Tim Cook" in result
+        assert "1447" in result
+
+    async def test_board_teaser(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        extras = {
+            "board": {
+                "members": [
+                    {
+                        "name": "Arthur Levinson",
+                        "is_independent": True,
+                        "committees": ["Compensation"],
+                    }
+                ]
+            }
+        }
+        app.client.companies.get = AsyncMock(return_value=_make_composed_response(extras))
+        result = await get_company("AAPL", mock_ctx, include="board")
+        assert "## Board of Directors" in result
+        assert "Arthur Levinson" in result
+
+    async def test_empty_insider_trades_list_renders_note(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        app.client.companies.get = AsyncMock(return_value=_make_composed_response({"insider_trades": []}))
+        result = await get_company("AAPL", mock_ctx, include="insider_trades")
+        assert "## Insider Trades" in result
+        assert "no recent insider trades" in result
+
+
+class TestGetCompanyPartialFailure:
+    async def test_error_slot_renders_warning(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        extras = {"holders": {"error": {"code": "upstream_timeout", "message": "holders did not complete within 3.0s"}}}
+        app.client.companies.get = AsyncMock(return_value=_make_composed_response(extras))
+        result = await get_company("AAPL", mock_ctx, include="holders")
+        assert "## Institutional Holders" in result
+        assert "⚠" in result
+        assert "upstream_timeout" in result
+        assert "did not complete" in result
+
+    async def test_mixed_success_and_error(self, mock_ctx: MagicMock) -> None:
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        extras = {
+            "financials": {"line_items": {"revenue": 391_035_000_000}, "currency": "USD"},
+            "holders": {"error": {"code": "upstream_timeout", "message": "timeout"}},
+        }
+        app.client.companies.get = AsyncMock(return_value=_make_composed_response(extras))
+        result = await get_company("AAPL", mock_ctx, include="financials,holders")
+        # Both sections present — no short-circuit on first failure
+        assert "## Financials" in result
+        assert "Revenue:" in result
+        assert "## Institutional Holders" in result
+        assert "⚠" in result
+
+    async def test_string_valued_error_falls_through_safely(self, mock_ctx: MagicMock) -> None:
+        """Degenerate API response: error is a string, not a dict. The inner
+        isinstance guard prevents _format_expander_error from crashing on
+        error.get("code") and falls through to the inline-payload path.
+        """
+        app = _app(mock_ctx)
+        app.resolver.resolve = AsyncMock(return_value="0000320193")
+        extras = {"holders": {"error": "unexpected string shape"}}
+        app.client.companies.get = AsyncMock(return_value=_make_composed_response(extras))
+        result = await get_company("AAPL", mock_ctx, include="holders")
+        # Should not crash; _render_expander's holders path handles the dict
+        # (even though the shape is unexpected — the teaser formatter's
+        # `isinstance(slot, list)` guard kicks in).
+        assert "## Institutional Holders" in result
