@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from enum import Enum
+
 from thesma_mcp.formatters import (
     format_currency,
     format_number,
@@ -36,7 +38,8 @@ class TestFormatCurrency:
         assert format_currency(None) == "N/A"
 
     def test_negative(self) -> None:
-        assert format_currency(-500_000_000) == "$-500.0M"
+        # MCP-28: sign-before-symbol convention across all currencies.
+        assert format_currency(-500_000_000) == "-$500.0M"
 
 
 class TestFormatNumber:
@@ -107,6 +110,111 @@ class TestFormatSource:
     def test_with_accession_no_source(self) -> None:
         result = format_source("10-K", accession="0000320193-24-000123")
         assert result == "Source: SEC EDGAR, 10-K filing 0000320193-24-000123"
+
+
+class TestFormatCurrencyMulti:
+    """MCP-28: multi-currency symbol map + sign-before-symbol convention."""
+
+    def test_usd_default_prefix_positive(self) -> None:
+        assert format_currency(17_200_000_000) == "$17.2B"
+
+    def test_usd_default_prefix_negative_sign_before_symbol(self) -> None:
+        assert format_currency(-266_000_000) == "-$266.0M"
+
+    def test_usd_explicit_currency_equivalent_to_default(self) -> None:
+        assert format_currency(17_200_000_000, currency="USD") == format_currency(17_200_000_000)
+
+    def test_usd_case_insensitive(self) -> None:
+        assert format_currency(17_200_000_000, currency="usd") == "$17.2B"
+
+    def test_eur_symbol_positive(self) -> None:
+        assert format_currency(17_200_000_000, currency="EUR") == "€17.2B"
+
+    def test_eur_symbol_negative(self) -> None:
+        assert format_currency(-266_000_000, currency="EUR") == "-€266.0M"
+
+    def test_eur_eps_two_decimals(self) -> None:
+        assert format_currency(10.77, decimals=2, currency="EUR") == "€10.77"
+
+    def test_gbp_symbol(self) -> None:
+        assert format_currency(500_000_000, currency="GBP") == "£500.0M"
+
+    def test_brl_multichar_symbol(self) -> None:
+        assert format_currency(1_200_000_000, currency="BRL") == "R$1.2B"
+        assert format_currency(-50_000_000, currency="BRL") == "-R$50.0M"
+
+    def test_cad_multichar_symbol(self) -> None:
+        assert format_currency(22_000_000, currency="CAD") == "CA$22.0M"
+
+    def test_inr_symbol(self) -> None:
+        assert format_currency(100_000_000, currency="INR") == "₹100.0M"
+
+    def test_suffix_form_chf(self) -> None:
+        assert format_currency(17_200_000_000, currency="CHF") == "CHF 17.2B"
+        assert format_currency(-50_000_000, currency="CHF") == "-CHF 50.0M"
+
+    def test_suffix_form_sek(self) -> None:
+        assert format_currency(212_400_000_000, currency="SEK") == "SEK 212.4B"
+
+    def test_suffix_form_case_normalised(self) -> None:
+        assert format_currency(17_200_000_000, currency="chf") == "CHF 17.2B"
+
+    def test_missing_currency_sentinel_renders_question_marks(self) -> None:
+        assert format_currency(17_200_000_000, currency="???") == "??? 17.2B"
+
+    def test_empty_string_currency_defaults_to_usd(self) -> None:
+        assert format_currency(100_000, currency="") == "$100.0K"
+
+    def test_none_value_returns_na_regardless_of_currency(self) -> None:
+        assert format_currency(None, currency="EUR") == "N/A"
+
+
+class TestFormatSourceEnumCoercion:
+    """MCP-28: format_source accepts Enum instances and coerces via .value."""
+
+    def test_str_ixbrl_renders_ixbrl_label(self) -> None:
+        result = format_source("10-K", accession="0000320193-26-000012", data_source="ixbrl")
+        assert result.endswith("(iXBRL)")
+
+    def test_enum_ixbrl_coerces_via_value(self) -> None:
+        class _FakeSource(Enum):
+            ixbrl = "ixbrl"
+
+        result = format_source("10-K", accession="0000320193-26-000012", data_source=_FakeSource.ixbrl)
+        assert result.endswith("(iXBRL)")
+        assert "Source.ixbrl" not in result
+        assert "_FakeSource" not in result
+
+    def test_enum_companyfacts_coerces(self) -> None:
+        class _FakeSource(Enum):
+            companyfacts = "companyfacts"
+
+        result = format_source("10-K", accession="abc", data_source=_FakeSource.companyfacts)
+        assert result.endswith("(CompanyFacts)")
+
+    def test_enum_mixed_coerces(self) -> None:
+        class _FakeSource(Enum):
+            mixed = "mixed"
+
+        result = format_source("10-K", accession="abc", data_source=_FakeSource.mixed)
+        assert result.endswith("(Mixed)")
+
+    def test_str_mixed_renders(self) -> None:
+        result = format_source("10-K", accession="abc", data_source="mixed")
+        assert result.endswith("(Mixed)")
+
+    def test_none_data_source_no_suffix(self) -> None:
+        result = format_source("10-K", accession="abc", data_source=None)
+        assert not result.endswith(")")
+
+    def test_unknown_enum_value_falls_back_to_raw(self) -> None:
+        class _FakeSource(Enum):
+            future = "future"
+
+        result = format_source("10-K", accession="abc", data_source=_FakeSource.future)
+        assert result.endswith("(future)")
+        assert "Source.future" not in result
+        assert "_FakeSource" not in result
 
 
 class TestFormatPagination:

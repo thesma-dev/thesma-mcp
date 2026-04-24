@@ -14,6 +14,20 @@ from thesma_mcp.server import AppContext, get_client, mcp
 logger = logging.getLogger(__name__)
 
 
+def _resolve_currency_from_value(raw: Any, context: str = "unknown") -> str:
+    """Validate a raw currency value (from an SDK attribute or a dict field)
+    and default to ``USD`` with a WARNING log when missing or empty.
+    """
+    if raw is None or not isinstance(raw, str) or not raw.strip():
+        logger.warning(
+            "currency field absent from SDK response (context=%s); defaulting to USD — "
+            "check SDK hoist status (IFRS-01 risk #7)",
+            context,
+        )
+        return "USD"
+    return str(raw)
+
+
 def _resolve_currency(response_data: Any, context: str = "unknown") -> str:
     """Extract ``currency`` from an SDK response, falling back to ``USD``
     with a WARNING log if the field is missing or None.
@@ -22,17 +36,7 @@ def _resolve_currency(response_data: Any, context: str = "unknown") -> str:
     invisibly. Emit a WARNING so operations can correlate the fallback
     with an SDK-version skew or a legacy cached response.
     """
-    currency = getattr(response_data, "currency", None)
-    if currency is None or not isinstance(currency, str) or not currency.strip():
-        logger.warning(
-            "currency field absent from SDK response (context=%s); defaulting to USD — "
-            "check SDK hoist status (IFRS-01 risk #7)",
-            context,
-        )
-        return "USD"
-    # Narrowed to str by the guard above; explicit str() satisfies mypy since
-    # the getattr return type is Any.
-    return str(currency)
+    return _resolve_currency_from_value(getattr(response_data, "currency", None), context)
 
 
 INCOME_FIELDS = [
@@ -216,6 +220,11 @@ def _format_statement(data: Any, ticker: str, statement: str, period: str) -> st
 
     lines = [f"{company_name} ({company_ticker}) \u2014 {title}, {period_label}", ""]
 
+    # IFRS-06: hoist currency resolution BEFORE the formatting loop so it
+    # can be threaded into format_currency. Missing / null currency still
+    # defaults to USD with a WARNING (see _resolve_currency).
+    currency = _resolve_currency(data, context=f"get_financials:{ticker}:{statement}")
+
     fields = STATEMENT_FIELDS.get(statement, [])
     line_items = data.line_items
     revenue = line_items.get("revenue")
@@ -226,11 +235,11 @@ def _format_statement(data: Any, ticker: str, statement: str, period: str) -> st
             continue
 
         if key in ("eps_basic", "eps_diluted"):
-            formatted = format_currency(value, decimals=2)
+            formatted = format_currency(value, decimals=2, currency=currency)
         elif key == "common_shares_outstanding":
             formatted = f"{int(value):,}"
         else:
-            formatted = format_currency(value)
+            formatted = format_currency(value, currency=currency)
 
         margin_str = ""
         if statement == "income" and key in MARGIN_FIELDS and revenue and revenue != 0:
@@ -240,10 +249,6 @@ def _format_statement(data: Any, ticker: str, statement: str, period: str) -> st
         lines.append(f"{label + ':':<24}{formatted}{margin_str}")
 
     lines.append("")
-    # IFRS-06: currency from SDK response, not hardcoded. Fallback to
-    # USD with a WARNING log if the field is missing (legacy cache, SDK
-    # skew) \u2014 see _resolve_currency.
-    currency = _resolve_currency(data, context=f"get_financials:{ticker}:{statement}")
     lines.append(f"Currency: {currency}")
     lines.append(format_source(filing_type, accession=filing_accession, data_source=data_source))
     if fiscal_year:
@@ -260,19 +265,21 @@ def _get_ctx(ctx: Context[Any, AppContext, Any]) -> AppContext:
 # --- MCP-25: multi-period + multi-statement formatters ---
 
 
-def _format_line_item_value(key: str, value: Any) -> str:
+def _format_line_item_value(key: str, value: Any, currency: str | None = None) -> str:
     """Shared per-field formatting for statement rendering.
 
     Mirrors the formatting used in `_format_statement` so the wide-table
     renderers (multi-period, multi-statement) produce visually consistent cells.
+    ``currency`` threads the per-row / per-period ISO code so IFRS filers
+    render native symbols; falls back to USD when omitted.
     """
     if value is None:
         return ""
     if key in ("eps_basic", "eps_diluted"):
-        return format_currency(value, decimals=2)
+        return format_currency(value, decimals=2, currency=currency)
     if key == "common_shares_outstanding":
         return f"{int(value):,}"
-    return format_currency(value)
+    return format_currency(value, currency=currency)
 
 
 def _resolve_list_item_fields(item: Any) -> dict[str, Any]:
@@ -341,7 +348,7 @@ def _format_statement_history(result: Any, ticker: str, statement: str) -> str:
 
     rows: list[list[str]] = []
     for key, label in fields:
-        cells = [_format_line_item_value(key, r["line_items"].get(key)) for r in items]
+        cells = [_format_line_item_value(key, r["line_items"].get(key), currency=r.get("currency")) for r in items]
         if not any(c for c in cells):
             continue
         rows.append([label, *cells])
@@ -350,7 +357,10 @@ def _format_statement_history(result: Any, ticker: str, statement: str) -> str:
     lines.append(format_table(headers, rows, alignments=alignments))
     lines.append("")
 
-    footer = [f"Currency: {items[0]['currency'] or 'USD'}"]
+    footer_currency = _resolve_currency_from_value(
+        items[0].get("currency"), context=f"get_financials:{ticker}:{statement}:history"
+    )
+    footer = [f"Currency: {footer_currency}"]
     _format_drift_notes(items, footer)
     footer.append("Source: SEC EDGAR, iXBRL filings.")
     lines.extend(footer)
@@ -368,7 +378,10 @@ def _extract_multi_statement_data(result: Any) -> dict[str, Any]:
 
 
 def _render_statement_section(
-    label: str, statement_body: dict[str, Any] | None, field_list: list[tuple[str, str]]
+    label: str,
+    statement_body: dict[str, Any] | None,
+    field_list: list[tuple[str, str]],
+    currency: str | None = None,
 ) -> list[str]:
     """Render one statement section inside a multi-statement block."""
     lines = [f"## {label}"]
@@ -380,7 +393,7 @@ def _render_statement_section(
         value = line_items.get(key)
         if value is None:
             continue
-        lines.append(f"{display + ':':<24}{_format_line_item_value(key, value)}")
+        lines.append(f"{display + ':':<24}{_format_line_item_value(key, value, currency=currency)}")
     return lines
 
 
@@ -398,7 +411,9 @@ def _format_multi_statement(result: Any, ticker: str, period: str) -> str:
     filing_accession = data.get("filing_accession")
     metadata = data.get("metadata") or {}
     data_source = metadata.get("source") or "ixbrl"
-    currency = data.get("currency") or "USD"
+    currency = _resolve_currency_from_value(
+        data.get("currency"), context=f"get_financials:{ticker}:all:multi_statement"
+    )
     period_label = f"FY {fiscal_year}" if period == "annual" else f"Q{fiscal_quarter} {fiscal_year}"
     filing_type = "10-K" if period == "annual" else "10-Q"
 
@@ -411,7 +426,7 @@ def _format_multi_statement(result: Any, ticker: str, period: str) -> str:
         ("cash_flow", "Cash Flow", CASH_FLOW_FIELDS),
     ):
         lines.append("")
-        lines.extend(_render_statement_section(label, statements.get(key), fields))
+        lines.extend(_render_statement_section(label, statements.get(key), fields, currency=currency))
 
     lines.append("")
     lines.append(f"Currency: {currency}")
@@ -457,7 +472,7 @@ def _format_multi_statement_history(result: Any, ticker: str) -> str:
                     cells.append("")
                     continue
                 value = (body.get("line_items") or {}).get(field_key)
-                cells.append(_format_line_item_value(field_key, value))
+                cells.append(_format_line_item_value(field_key, value, currency=p.get("currency")))
                 if value is not None:
                     any_populated = True
             if not any_populated:
@@ -475,7 +490,10 @@ def _format_multi_statement_history(result: Any, ticker: str) -> str:
     lines.append("")
     # Footer — synthesize per-period records for the drift-note helper.
     synth = [{"currency": p.get("currency"), "taxonomy": p.get("taxonomy")} for p in periods]
-    footer = [f"Currency: {periods[0].get('currency') or 'USD'}"]
+    footer_currency = _resolve_currency_from_value(
+        periods[0].get("currency"), context=f"get_financials:{ticker}:all:history"
+    )
+    footer = [f"Currency: {footer_currency}"]
     _format_drift_notes(synth, footer)
     footer.append("Source: SEC EDGAR, iXBRL filings.")
     lines.extend(footer)
@@ -531,6 +549,10 @@ async def get_financial_metric(
     if not series:
         return f"No data found for metric '{metric}'. The company may not report this field."
 
+    # IFRS-06: hoist envelope-level currency resolution before the
+    # per-datapoint loop so format_currency can pick the right symbol.
+    currency = _resolve_currency(data, context=f"get_financial_metric:{ticker}:{metric}")
+
     company_name = data.company.name if data.company else ticker.upper()
     company_ticker = data.company.ticker if data.company and data.company.ticker else ticker.upper()
     metric_label = metric.replace("_", " ").title()
@@ -543,9 +565,9 @@ async def get_financial_metric(
         year = dp.fiscal_year
         value = dp.value
         if metric in ("eps_basic", "eps_diluted"):
-            formatted = format_currency(value, decimals=2)
+            formatted = format_currency(value, decimals=2, currency=currency)
         else:
-            formatted = format_currency(value)
+            formatted = format_currency(value, currency=currency)
         lines.append(f"{str(year):<8}{formatted}")
 
     count = len(series)
@@ -554,10 +576,6 @@ async def get_financial_metric(
     max_year = max(years) if years else ""
 
     lines.append("")
-    # IFRS-06: currency from SDK response (not hardcoded). Time-series
-    # responses expose ``currency`` at the series envelope \u2014 fall back
-    # to USD with a WARNING if missing.
-    currency = _resolve_currency(data, context=f"get_financial_metric:{ticker}:{metric}")
     lines.append(f"{count} data point{'s' if count != 1 else ''} from {min_year} to {max_year}.")
     lines.append(f"Source: SEC EDGAR, iXBRL filings. Currency: {currency}.")
 
