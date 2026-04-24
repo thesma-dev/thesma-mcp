@@ -43,9 +43,15 @@ def company_response(cik: str = "0000320193", ticker: str = "AAPL", name: str = 
 
 
 def company_list_response(
-    companies: list[dict[str, str]] | None = None,
+    companies: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Sample company list response."""
+    """Sample company list response.
+
+    SDK-25 (post-Wave-1) added ``detail_url`` as a required ``str`` field on
+    ``CompanyListItem``. This helper auto-injects a conformant stub URL on
+    every row that doesn't explicitly provide one so existing fixtures keep
+    working without per-call plumbing.
+    """
     if companies is None:
         companies = [
             {
@@ -55,6 +61,10 @@ def company_list_response(
                 "company_tier": "sp500",
             }
         ]
+    for c in companies:
+        if "detail_url" not in c:
+            cik = c.get("cik", "0000000000")
+            c["detail_url"] = f"https://api.thesma.dev/v1/us/sec/companies/{cik}"
     return {
         "data": companies,
         "pagination": {"page": 1, "per_page": 25, "total": len(companies)},

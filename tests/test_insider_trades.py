@@ -160,3 +160,143 @@ async def test_trades_no_results() -> None:
 
     result = await get_insider_trades(ctx, type="grant")
     assert "No insider trades found" in result
+
+
+# --- MCP-24: SDK-30 aggregation-shape surfacing + flat=True + forwarding bug fixes ---
+
+
+def _make_aggregate_trade(
+    shares: float = 74_500,
+    slice_count: int = 44,
+    price_per_share: float = 176.11,
+    range_low: float = 171.97,
+    range_high: float = 177.51,
+) -> MagicMock:
+    """Build an InsiderTradeAggregateListItem-shaped mock (slice_count + price_range)."""
+    m = _make_trade(
+        person_name="Kress Colette",
+        person_title="EVP & CFO",
+        shares=shares,
+        price_per_share=price_per_share,
+    )
+    m.slice_count = slice_count
+    pr = MagicMock()
+    pr.low = range_low
+    pr.high = range_high
+    m.price_range = pr
+    return m
+
+
+@pytest.mark.asyncio
+async def test_trades_render_slice_count_suffix_when_gt_1() -> None:
+    ctx = _make_ctx()
+    resp = _make_paginated_response([_make_aggregate_trade(slice_count=44)], total=1)
+    ctx.request_context.lifespan_context.client.insider_trades.list = AsyncMock(return_value=resp)
+
+    result = await get_insider_trades(ctx, ticker="AAPL")
+    assert "74,500 (44 slices)" in result
+
+
+@pytest.mark.asyncio
+async def test_trades_omit_slice_count_suffix_when_eq_1() -> None:
+    ctx = _make_ctx()
+    resp = _make_paginated_response([_make_aggregate_trade(slice_count=1)], total=1)
+    ctx.request_context.lifespan_context.client.insider_trades.list = AsyncMock(return_value=resp)
+
+    result = await get_insider_trades(ctx, ticker="AAPL")
+    assert "74,500" in result
+    assert "slices" not in result
+
+
+@pytest.mark.asyncio
+async def test_trades_render_price_range_when_spread() -> None:
+    ctx = _make_ctx()
+    trade = _make_aggregate_trade(range_low=171.97, range_high=177.51, price_per_share=174.89)
+    resp = _make_paginated_response([trade], total=1)
+    ctx.request_context.lifespan_context.client.insider_trades.list = AsyncMock(return_value=resp)
+
+    result = await get_insider_trades(ctx, ticker="AAPL")
+    assert "$171.97" in result
+    assert "$177.51" in result
+    assert "avg $174.89" in result
+
+
+@pytest.mark.asyncio
+async def test_trades_fall_back_to_avg_when_range_collapsed() -> None:
+    """When price_range.low == price_range.high, render the weighted-avg form (no dash)."""
+    ctx = _make_ctx()
+    trade = _make_aggregate_trade(range_low=174.89, range_high=174.89, price_per_share=174.89)
+    resp = _make_paginated_response([trade], total=1)
+    ctx.request_context.lifespan_context.client.insider_trades.list = AsyncMock(return_value=resp)
+
+    result = await get_insider_trades(ctx, ticker="AAPL")
+    assert "$174.89" in result
+    assert "–" not in result  # em-dash only appears in the range form
+
+
+@pytest.mark.asyncio
+async def test_trades_flat_true_forwards_to_list() -> None:
+    ctx = _make_ctx()
+    resp = _make_paginated_response([_make_trade()], total=1)
+    mock_list = AsyncMock(return_value=resp)
+    ctx.request_context.lifespan_context.client.insider_trades.list = mock_list
+
+    await get_insider_trades(ctx, ticker="AAPL", flat=True)
+    assert mock_list.call_args.kwargs.get("flat") is True
+
+
+@pytest.mark.asyncio
+async def test_trades_flat_false_default_forwards_false() -> None:
+    ctx = _make_ctx()
+    resp = _make_paginated_response([_make_trade()], total=1)
+    mock_list = AsyncMock(return_value=resp)
+    ctx.request_context.lifespan_context.client.insider_trades.list = mock_list
+
+    await get_insider_trades(ctx, ticker="AAPL")
+    assert mock_list.call_args.kwargs.get("flat") is False
+
+
+@pytest.mark.asyncio
+async def test_trades_min_value_forwards_to_list() -> None:
+    """Pre-existing bug fix: min_value was silently dropped before MCP-24."""
+    ctx = _make_ctx()
+    resp = _make_paginated_response([_make_trade()], total=1)
+    mock_list = AsyncMock(return_value=resp)
+    ctx.request_context.lifespan_context.client.insider_trades.list = mock_list
+
+    await get_insider_trades(ctx, ticker="AAPL", min_value=1_000_000)
+    assert mock_list.call_args.kwargs.get("min_value") == 1_000_000
+
+
+@pytest.mark.asyncio
+async def test_trades_flat_true_forwards_to_list_all() -> None:
+    ctx = _make_ctx()
+    resp = _make_paginated_response([_make_trade()], total=1)
+    mock_list_all = AsyncMock(return_value=resp)
+    ctx.request_context.lifespan_context.client.insider_trades.list_all = mock_list_all
+
+    await get_insider_trades(ctx, flat=True)
+    assert mock_list_all.call_args.kwargs.get("flat") is True
+
+
+@pytest.mark.asyncio
+async def test_trades_min_value_forwards_to_list_all() -> None:
+    ctx = _make_ctx()
+    resp = _make_paginated_response([_make_trade()], total=1)
+    mock_list_all = AsyncMock(return_value=resp)
+    ctx.request_context.lifespan_context.client.insider_trades.list_all = mock_list_all
+
+    await get_insider_trades(ctx, min_value=1_000_000)
+    assert mock_list_all.call_args.kwargs.get("min_value") == 1_000_000
+
+
+@pytest.mark.asyncio
+async def test_trades_type_forwards_to_list_all() -> None:
+    """Pre-existing bug fix: `type` kwarg was silently dropped on the all-companies branch."""
+    ctx = _make_ctx()
+    resp = _make_paginated_response([_make_trade()], total=1)
+    mock_list_all = AsyncMock(return_value=resp)
+    ctx.request_context.lifespan_context.client.insider_trades.list_all = mock_list_all
+
+    await get_insider_trades(ctx, type="sale")
+    assert mock_list_all.call_args.kwargs.get("trade_type") == "sale"

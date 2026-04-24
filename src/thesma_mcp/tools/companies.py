@@ -212,6 +212,82 @@ def _yoy_indicator(value: float | None) -> str:
     return f"\u25bc {abs(value):.1f}%"
 
 
+def _format_summary_model_or_dict(summary: Any) -> list[str] | None:
+    """Render the labor_context.summary derived-classification block.
+
+    Accepts a ``LaborContextSummary`` Pydantic model OR a dict (``extra='allow'``
+    passthrough path). Returns ``None`` when every sub-field is null so the
+    caller can skip the section header entirely — avoids emitting a bare
+    ``**Derived Signals**`` block with no content under it.
+    """
+
+    def _get(attr: str) -> Any:
+        if isinstance(summary, dict):
+            return summary.get(attr)
+        return getattr(summary, attr, None)
+
+    hiring = _get("industry_hiring_trend")
+    unemp = _get("local_unemployment_trend")
+    ratio = _get("comp_to_market_ratio")
+    tightness = _get("labour_market_tightness")
+    if hiring is None and unemp is None and ratio is None and tightness is None:
+        return None
+    lines: list[str] = ["**Derived Signals**"]
+    # Guard with `is not None`, NOT truthiness — the API can return an
+    # empty-string classification label for un-classified cohorts; `if hiring:`
+    # would silently drop those. Matches the `if emp is not None` pattern in
+    # the existing industry / local-market renderers below.
+    if hiring is not None:
+        lines.append(f"- Industry Hiring Trend: {hiring}")
+    if unemp is not None:
+        lines.append(f"- Local Unemployment Trend: {unemp}")
+    if ratio is not None:
+        lines.append(f"- Comp-to-Market Ratio: {ratio:.1f}x")
+    if tightness is not None:
+        # 1.0 ± 0.05 dead band avoids "tight / loose" flipping on trivial
+        # decimal jitter around parity.
+        if tightness >= 1.05:
+            label = "(tight)"
+        elif tightness <= 0.95:
+            label = "(loose)"
+        else:
+            label = ""
+        suffix = f" {label}" if label else ""
+        lines.append(f"- Labour Market Tightness: {tightness:.2f}{suffix}")
+    return lines
+
+
+def _format_data_freshness_model_or_dict(freshness: Any) -> list[str] | None:
+    """Render the labor_context.data_freshness period-anchor block.
+
+    Accepts a ``DataFreshness`` model or dict. Returns ``None`` when all 6
+    period anchors are null so the section is omitted.
+    """
+
+    def _get(attr: str) -> Any:
+        if isinstance(freshness, dict):
+            return freshness.get(attr)
+        return getattr(freshness, attr, None)
+
+    periods = [
+        ("CES", _get("ces_period")),
+        ("QCEW", _get("qcew_period")),
+        ("JOLTS", _get("jolts_period")),
+        ("LAUS", _get("laus_period")),
+        ("OEWS", _get("oews_period")),
+        ("SEC Exec Comp Snapshot", _get("sec_exec_comp_snapshot_date")),
+    ]
+    # Explicit `is not None` — an empty-string period value should still render
+    # so the operator sees the shape rather than a silent suppression.
+    non_null = [(label, val) for label, val in periods if val is not None]
+    if not non_null:
+        return None
+    lines: list[str] = ["**Data Freshness**"]
+    for label, val in non_null:
+        lines.append(f"- {label}: {val}")
+    return lines
+
+
 def _format_labor_context_model(labor_ctx: Any) -> str:
     """Format the labor market context from a LaborContext Pydantic model."""
     sections: list[str] = ["## Labor Market Context"]
@@ -285,6 +361,23 @@ def _format_labor_context_model(labor_ctx: Any) -> str:
         ratio = getattr(comp, "comp_to_market_ratio", None)
         if ratio is not None:
             sections.append(f"- Company CEO Comp-to-Market: {ratio:.1f}x")
+
+    # MCP-24: post-S3 LaborContext gained `summary` (4 derived classification
+    # labels) and `data_freshness` (6 period anchors). Append both blocks at
+    # the bottom of the labor_context section, after compensation_benchmark.
+    summary = getattr(labor_ctx, "summary", None)
+    if summary is not None:
+        summary_block = _format_summary_model_or_dict(summary)
+        if summary_block is not None:
+            sections.append("")
+            sections.extend(summary_block)
+
+    freshness = getattr(labor_ctx, "data_freshness", None)
+    if freshness is not None:
+        freshness_block = _format_data_freshness_model_or_dict(freshness)
+        if freshness_block is not None:
+            sections.append("")
+            sections.extend(freshness_block)
 
     return "\n".join(sections)
 
@@ -363,6 +456,21 @@ def _format_labor_context(labor_ctx: dict[str, Any]) -> str:
         ratio = comp.get("comp_to_market_ratio")
         if ratio is not None:
             sections.append(f"- Company CEO Comp-to-Market: {ratio:.1f}x")
+
+    # Same summary + data_freshness appends as the model-path twin above.
+    summary = labor_ctx.get("summary")
+    if summary is not None:
+        summary_block = _format_summary_model_or_dict(summary)
+        if summary_block is not None:
+            sections.append("")
+            sections.extend(summary_block)
+
+    freshness = labor_ctx.get("data_freshness")
+    if freshness is not None:
+        freshness_block = _format_data_freshness_model_or_dict(freshness)
+        if freshness_block is not None:
+            sections.append("")
+            sections.extend(freshness_block)
 
     return "\n".join(sections)
 

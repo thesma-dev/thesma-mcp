@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC
 from typing import Any
 
 from mcp.server.fastmcp import Context
@@ -71,7 +72,9 @@ async def search_funds(
 @mcp.tool(
     description=(
         "Get which institutional funds hold a company's stock. "
-        "Shows shares held, market value, and discretion type. Accepts ticker or CIK."
+        "Shows shares held, market value, and discretion type. Accepts ticker or CIK. "
+        "Response rows carry the 13F report_quarter and filed_at timestamp; "
+        "when quarter is omitted the API returns the latest available quarter."
     )
 )
 async def get_institutional_holders(
@@ -111,7 +114,10 @@ async def get_institutional_holders(
         company_name = ticker.upper()
         company_ticker_str = ticker.upper()
 
-    q_label = quarter or "Latest"
+    # Read the actual report quarter from the rows — API returns one quarter's
+    # data per response, so row 0 is authoritative. Defensive fallback when
+    # holders is non-empty (the empty-list short-circuit above protects us).
+    q_label = holders[0].report_quarter if holders else (quarter or "Latest")
 
     title = (
         f"{company_name} ({company_ticker_str}) — Top Institutional Holders, {q_label} ({len(holders)} of {total:,})"
@@ -134,9 +140,16 @@ async def get_institutional_holders(
             ]
         )
 
+    # Normalize filed_at to UTC before stripping time. SDK-29 types filed_at as
+    # AwareDatetime (requires a tzinfo) but doesn't force UTC — a non-UTC offset
+    # at 23:30 local could already be the next day UTC; astimezone keeps the
+    # day anchor stable.
+    most_recent_filed = max(h.filed_at for h in holders).astimezone(UTC).date().isoformat()
+
     lines = [title, ""]
     lines.append(format_table(headers, rows, alignments=["r", "l", "r", "r", "l"]))
     lines.append("")
+    lines.append(f"Holdings as of {q_label}, most recent filing submitted {most_recent_filed}.")
     lines.append(f"Showing {len(holders)} of {total:,} institutional holders.")
     lines.append(f"Source: SEC EDGAR, 13F filings ({q_label}).")
     return "\n".join(lines)
@@ -145,7 +158,8 @@ async def get_institutional_holders(
 @mcp.tool(
     description=(
         "Get a fund's portfolio holdings. Shows what stocks a fund owns, "
-        "with share counts and market values. Accepts fund name or CIK."
+        "with share counts and market values. Accepts fund name or CIK. "
+        "Response rows carry the 13F report_quarter and filed_at timestamp."
     )
 )
 async def get_fund_holdings(
@@ -176,7 +190,8 @@ async def get_fund_holdings(
         return "No holdings found for this fund."
 
     fund_display = fund_name.upper()
-    q_label = quarter or "Latest"
+    # Authoritative quarter from the row (matches the MCP-24 pattern).
+    q_label = holdings[0].report_quarter if holdings else (quarter or "Latest")
     type_label = position_type.title() if position_type != "all" else "All"
 
     title = f"{fund_display} — Portfolio Holdings, {q_label} ({type_label}, {len(holdings)} of {total:,})"
@@ -196,9 +211,12 @@ async def get_fund_holdings(
             ]
         )
 
+    most_recent_filed = max(h.filed_at for h in holdings).astimezone(UTC).date().isoformat()
+
     lines = [title, ""]
     lines.append(format_table(headers, rows, alignments=["r", "l", "l", "r", "r"]))
     lines.append("")
+    lines.append(f"Holdings as of {q_label}, most recent filing submitted {most_recent_filed}.")
     lines.append(f"Showing {len(holdings)} of {total:,} {type_label.lower()} positions.")
     lines.append(f"Source: SEC EDGAR, 13F filing ({q_label}).")
     return "\n".join(lines)

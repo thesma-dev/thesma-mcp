@@ -9,7 +9,10 @@ import pytest
 from thesma.errors import ThesmaError
 
 from thesma_mcp.tools.companies import (
+    _format_data_freshness_model_or_dict,
     _format_labor_context,
+    _format_labor_context_model,
+    _format_summary_model_or_dict,
     _parse_exchange,
     _render_exchange,
     get_company,
@@ -275,6 +278,233 @@ class TestFormatLaborContext:
         assert "\u25b2" not in result
         assert "\u25bc" not in result
         assert "500.0" in result
+
+
+# --- MCP-24: SDK-28 LaborContext.summary + data_freshness blocks ---
+
+
+class TestLaborContextDerivedSignalsBlock:
+    """Tests for `_format_summary_model_or_dict` — the new `**Derived Signals**` block
+    appended to labor_context rendering by MCP-24.
+    """
+
+    def test_renders_all_four_fields_from_dict(self) -> None:
+        lines = _format_summary_model_or_dict(
+            {
+                "industry_hiring_trend": "accelerating",
+                "local_unemployment_trend": "improving",
+                "comp_to_market_ratio": 1.12,
+                "labour_market_tightness": 1.30,
+            }
+        )
+        assert lines is not None
+        rendered = "\n".join(lines)
+        assert "**Derived Signals**" in rendered
+        assert "Industry Hiring Trend: accelerating" in rendered
+        assert "Local Unemployment Trend: improving" in rendered
+        assert "Comp-to-Market Ratio: 1.1x" in rendered
+        assert "Labour Market Tightness: 1.30 (tight)" in rendered
+
+    def test_renders_from_model_path(self) -> None:
+        """Model-path (Pydantic-typed labor_context.summary) renders identically."""
+        from types import SimpleNamespace
+
+        summary = SimpleNamespace(
+            industry_hiring_trend="declining",
+            local_unemployment_trend=None,
+            comp_to_market_ratio=0.85,
+            labour_market_tightness=0.70,
+        )
+        lines = _format_summary_model_or_dict(summary)
+        assert lines is not None
+        rendered = "\n".join(lines)
+        assert "Industry Hiring Trend: declining" in rendered
+        assert "Comp-to-Market Ratio: 0.8x" in rendered
+        assert "Labour Market Tightness: 0.70 (loose)" in rendered
+        # Null local_unemployment_trend is suppressed entirely
+        assert "Local Unemployment Trend" not in rendered
+
+    def test_suppresses_block_when_all_null(self) -> None:
+        """All-null summary returns None so the caller can skip the header."""
+        lines = _format_summary_model_or_dict(
+            {
+                "industry_hiring_trend": None,
+                "local_unemployment_trend": None,
+                "comp_to_market_ratio": None,
+                "labour_market_tightness": None,
+            }
+        )
+        assert lines is None
+
+    def test_labour_market_tightness_bucket_balanced_no_suffix(self) -> None:
+        """Tightness in the 1.0 ± 0.05 dead band gets no `(tight)` / `(loose)` suffix."""
+        lines = _format_summary_model_or_dict({"labour_market_tightness": 1.00})
+        assert lines is not None
+        rendered = "\n".join(lines)
+        assert "Labour Market Tightness: 1.00" in rendered
+        assert "(tight)" not in rendered
+        assert "(loose)" not in rendered
+
+    def test_empty_string_hiring_trend_still_renders(self) -> None:
+        """Classification label of "" should render, not be silently suppressed."""
+        lines = _format_summary_model_or_dict({"industry_hiring_trend": ""})
+        assert lines is not None
+        rendered = "\n".join(lines)
+        # The empty-string value produces a "Industry Hiring Trend: " line —
+        # the operator sees the shape rather than a silent suppression.
+        assert "Industry Hiring Trend:" in rendered
+
+
+class TestDataFreshnessBlock:
+    """Tests for `_format_data_freshness_model_or_dict`."""
+
+    def test_renders_all_six_periods(self) -> None:
+        lines = _format_data_freshness_model_or_dict(
+            {
+                "ces_period": "2025-11",
+                "qcew_period": "2025-Q2",
+                "jolts_period": "2025-10",
+                "laus_period": "2025-11",
+                "oews_period": "2024",
+                "sec_exec_comp_snapshot_date": "2025-03-15",
+            }
+        )
+        assert lines is not None
+        rendered = "\n".join(lines)
+        assert "**Data Freshness**" in rendered
+        assert "CES: 2025-11" in rendered
+        assert "QCEW: 2025-Q2" in rendered
+        assert "JOLTS: 2025-10" in rendered
+        assert "LAUS: 2025-11" in rendered
+        assert "OEWS: 2024" in rendered
+        assert "SEC Exec Comp Snapshot: 2025-03-15" in rendered
+
+    def test_renders_partial(self) -> None:
+        lines = _format_data_freshness_model_or_dict(
+            {
+                "ces_period": "2025-11",
+                "qcew_period": None,
+                "jolts_period": None,
+                "laus_period": None,
+                "oews_period": None,
+                "sec_exec_comp_snapshot_date": None,
+            }
+        )
+        assert lines is not None
+        rendered = "\n".join(lines)
+        assert "CES: 2025-11" in rendered
+        assert "QCEW" not in rendered
+        assert "JOLTS" not in rendered
+
+    def test_suppresses_block_when_all_null(self) -> None:
+        lines = _format_data_freshness_model_or_dict(
+            {
+                "ces_period": None,
+                "qcew_period": None,
+                "jolts_period": None,
+                "laus_period": None,
+                "oews_period": None,
+                "sec_exec_comp_snapshot_date": None,
+            }
+        )
+        assert lines is None
+
+
+class TestLaborContextAppendsSummaryAndFreshness:
+    """Integration: `_format_labor_context` (dict) and `_format_labor_context_model`
+    (model) both append the new blocks at the bottom of the labor_context section.
+    """
+
+    def test_dict_path_appends_both_blocks(self) -> None:
+        rendered = _format_labor_context(
+            {
+                "industry": {"naics_code": "5112", "naics_description": "Software"},
+                "summary": {
+                    "industry_hiring_trend": "stable",
+                    "comp_to_market_ratio": 1.12,
+                },
+                "data_freshness": {
+                    "ces_period": "2025-11",
+                    "oews_period": "2024",
+                },
+            }
+        )
+        # Existing industry block still renders first; new blocks append below.
+        assert rendered.index("## Labor Market Context") < rendered.index("**Derived Signals**")
+        assert rendered.index("**Derived Signals**") < rendered.index("**Data Freshness**")
+        assert "CES: 2025-11" in rendered
+
+    def test_comp_to_market_ratio_appears_in_both_blocks(self) -> None:
+        """Intentional duplication per MCP-24 Architecture Decision #7: comp_to_market_ratio
+        renders once in CEO Compensation Benchmark (alongside wage percentiles) AND once in
+        Derived Signals (alongside other classification labels).
+        """
+        rendered = _format_labor_context(
+            {
+                "compensation_benchmark": {
+                    "soc_code": "11-1011",
+                    "soc_title": "Chief Executives",
+                    "market_median_annual_wage": 250000,
+                    "comp_to_market_ratio": 1.12,
+                },
+                "summary": {"comp_to_market_ratio": 1.12},
+            }
+        )
+        # Derived Signals form
+        assert "Comp-to-Market Ratio: 1.1x" in rendered
+        # CEO Compensation Benchmark form (distinct label)
+        assert "Company CEO Comp-to-Market: 1.1x" in rendered
+
+    def test_model_path_appends_both_blocks(self) -> None:
+        from types import SimpleNamespace
+
+        labor_ctx = SimpleNamespace(
+            industry=SimpleNamespace(
+                naics_code="5112",
+                naics_description="Software",
+                total_employment_thousands=None,
+                employment_yoy_pct=None,
+                avg_hourly_earnings=None,
+                earnings_yoy_pct=None,
+            ),
+            local_market=None,
+            compensation_benchmark=None,
+            summary=SimpleNamespace(
+                industry_hiring_trend="accelerating",
+                local_unemployment_trend=None,
+                comp_to_market_ratio=None,
+                labour_market_tightness=None,
+            ),
+            data_freshness=SimpleNamespace(
+                ces_period="2025-11",
+                qcew_period=None,
+                jolts_period=None,
+                laus_period=None,
+                oews_period=None,
+                sec_exec_comp_snapshot_date=None,
+            ),
+        )
+        rendered = _format_labor_context_model(labor_ctx)
+        assert "**Derived Signals**" in rendered
+        assert "**Data Freshness**" in rendered
+        assert "CES: 2025-11" in rendered
+
+    def test_missing_summary_and_freshness_does_not_crash(self) -> None:
+        """Backwards-compat: labor_context without the new sub-objects renders unchanged."""
+        rendered = _format_labor_context(
+            {
+                "industry": {
+                    "naics_code": "5112",
+                    "naics_description": "Software",
+                    "total_employment_thousands": 500.0,
+                    "employment_yoy_pct": 2.3,
+                },
+            }
+        )
+        assert "**Derived Signals**" not in rendered
+        assert "**Data Freshness**" not in rendered
+        # Existing industry rendering is preserved.
+        assert "500.0" in rendered
 
 
 class TestSearchCompaniesExchangeDomicile:
