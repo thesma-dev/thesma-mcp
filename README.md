@@ -155,6 +155,21 @@ Get your API key at [portal.thesma.dev](https://portal.thesma.dev) (free tier: 2
 |------|-------------|
 | `search_filing_sections` | Semantic search of SEC filing section content (Risk Factors, MD&A, etc.) by natural-language query — optionally scoped by ticker, filing type, section type, year, or similarity threshold |
 
+### Webhooks
+
+| Tool | Description |
+|------|-------------|
+| `list_webhook_event_types` | List the 5 event types you can subscribe to |
+| `list_webhooks` | List your webhook subscriptions |
+| `create_webhook` | Create a new subscription (returns one-time HMAC secret) |
+| `get_webhook` | Get details for one subscription |
+| `update_webhook` | Modify url / events / filing_types / is_active / description |
+| `delete_webhook` | Delete a subscription |
+| `list_webhook_deliveries` | Recent delivery attempts (debugging) |
+| `rotate_webhook_secret` | Generate a new HMAC secret (invalidates old) |
+| `send_webhook_test` | Enqueue a synthetic test delivery |
+| `replay_webhook_delivery` | Re-queue a past delivery (within 7-day window) |
+
 ### Industry Lookup
 
 | Tool | Description |

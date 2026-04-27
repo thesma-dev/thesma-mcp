@@ -229,6 +229,7 @@ def _register_tools() -> None:
     import thesma_mcp.tools.sba as _sba_tools  # noqa: F401
     import thesma_mcp.tools.screener as _screener_tools  # noqa: F401
     import thesma_mcp.tools.sections as _sections_tools  # noqa: F401
+    import thesma_mcp.tools.webhooks as _webhooks_tools  # noqa: F401
 
 
 # Register tools on the default module-level mcp instance
