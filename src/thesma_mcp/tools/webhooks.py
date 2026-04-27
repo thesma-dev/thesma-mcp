@@ -6,7 +6,7 @@ from typing import Any
 
 from mcp.server.fastmcp import Context
 from pydantic import ValidationError
-from thesma.errors import ThesmaError
+from thesma.errors import PaymentRequiredError, ThesmaError
 
 from thesma_mcp.formatters import format_table
 from thesma_mcp.server import AppContext, get_client, mcp
@@ -98,12 +98,12 @@ async def create_webhook(
         )
     except ValidationError as e:
         return _format_event_validation_error(e)
+    except PaymentRequiredError:
+        return (
+            "Webhooks require a Starter+ plan. The current API key is on free tier and "
+            "received a 402 from the api. Visit https://thesma.dev/pricing to upgrade."
+        )
     except ThesmaError as e:
-        if e.status_code == 402:
-            return (
-                "Webhooks require a Starter+ plan. The current API key is on free tier and "
-                "received a 402 from the api. Visit https://thesma.dev/pricing to upgrade."
-            )
         return str(e)
     return _format_webhook_with_secret(response.data)
 

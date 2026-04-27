@@ -888,3 +888,80 @@ class TestScreenerScaleConvention:
             f"screen_companies @mcp.tool description ballooned to {len(description_block)} chars — "
             "review whether the addition is load-bearing or cuttable."
         )
+
+
+@pytest.mark.asyncio
+async def test_screen_companies_tier_required_renders_upgrade_message() -> None:
+    """SDK-39 wiring: TierRequiredError on /screener?include= surfaces a tier-aware
+    upgrade message including current_tier and required_tier."""
+    from thesma.errors import TierRequiredError
+
+    ctx = _make_ctx(MagicMock())
+    ctx.request_context.lifespan_context.client.screener.screen = AsyncMock(
+        side_effect=TierRequiredError(
+            "Cross-dataset enrichment on the screener is a Pro tier feature.",
+            status_code=402,
+            error_code="tier_required",
+            current_tier="free",
+            required_tier="pro",
+        )
+    )
+
+    result = await screen_companies(ctx, include="labor_context")
+
+    assert "Pro tier required" in result
+    assert "Current tier: free" in result
+    assert "Required tier: pro" in result
+    assert "Cross-dataset enrichment on the screener is a Pro tier feature" in result
+    assert "without `include=`" in result
+
+
+@pytest.mark.asyncio
+async def test_screen_companies_tier_required_with_combined_include() -> None:
+    """Comma-separated include= triggers the same tier-aware path."""
+    from thesma.errors import TierRequiredError
+
+    ctx = _make_ctx(MagicMock())
+    ctx.request_context.lifespan_context.client.screener.screen = AsyncMock(
+        side_effect=TierRequiredError(
+            "Cross-dataset enrichment on the screener is a Pro tier feature.",
+            status_code=402,
+            error_code="tier_required",
+            current_tier="starter",
+            required_tier="pro",
+        )
+    )
+
+    result = await screen_companies(ctx, include="labor_context,lending_context")
+
+    assert "Pro tier required" in result
+    assert "Current tier: starter" in result
+    assert "Required tier: pro" in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "current_tier_value",
+    [None, ""],
+    ids=["none", "empty_string"],
+)
+async def test_screen_companies_tier_required_with_falsy_current_tier(
+    current_tier_value: str | None,
+) -> None:
+    """Falsy current_tier (None default or empty-string defensive) falls back to 'unknown'."""
+    from thesma.errors import TierRequiredError
+
+    ctx = _make_ctx(MagicMock())
+    ctx.request_context.lifespan_context.client.screener.screen = AsyncMock(
+        side_effect=TierRequiredError(
+            "Cross-dataset enrichment on the screener is a Pro tier feature.",
+            status_code=402,
+            error_code="tier_required",
+            current_tier=current_tier_value,
+            required_tier=None,
+        )
+    )
+
+    result = await screen_companies(ctx, include="labor_context")
+    assert "Current tier: unknown" in result
+    assert "Required tier: pro" in result

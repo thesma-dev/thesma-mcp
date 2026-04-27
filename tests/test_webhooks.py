@@ -289,9 +289,15 @@ async def test_create_webhook_empty_string_description_normalized() -> None:
 
 @pytest.mark.asyncio
 async def test_create_webhook_402_renders_upgrade_message() -> None:
+    from thesma.errors import PaymentRequiredError
+
     ctx = _make_ctx()
     ctx.request_context.lifespan_context.client.webhooks.create = AsyncMock(
-        side_effect=ThesmaError("Plan tier insufficient", status_code=402)
+        side_effect=PaymentRequiredError(
+            "Webhooks are a Starter tier feature.",
+            status_code=402,
+            error_code="plan_cap_exceeded",
+        )
     )
 
     result = await create_webhook(ctx, url="https://example.com/hook", events=["filing.created"])

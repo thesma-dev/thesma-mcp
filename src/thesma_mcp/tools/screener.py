@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from mcp.server.fastmcp import Context
-from thesma.errors import ThesmaError
+from thesma.errors import ThesmaError, TierRequiredError
 
 from thesma_mcp.formatters import format_number, format_percent, format_table
 from thesma_mcp.server import get_client, mcp
@@ -401,6 +401,8 @@ def _get_lending_context(lc: Any) -> dict[str, Any] | None:
         "and industry charge-off rate (%). "
         "Set include='lending_context' or include='labor_context,lending_context' to surface "
         "an SBA lending context summary on each row. "
+        "Note: include='labor_context' and include='lending_context' require a Pro+ plan. "
+        "Free/Starter callers receive a tier upgrade message instead of enriched results. "
         "Sort by any ratio: gross_margin, operating_margin, net_margin, return_on_equity, "
         "return_on_assets, debt_to_equity, current_ratio, interest_coverage, "
         "revenue_growth_yoy, net_income_growth_yoy, eps_growth_yoy. "
@@ -577,6 +579,16 @@ async def screen_companies(
             min_hq_county_wage_growth=min_hq_county_wage_growth,
             min_comp_to_market_ratio=min_comp_to_market_ratio,
             per_page=limit,
+        )
+    except TierRequiredError as e:
+        current = e.current_tier or "unknown"
+        required = e.required_tier or "pro"
+        return (
+            f"Pro tier required for cross-dataset enrichment. "
+            f"Current tier: {current}. Required tier: {required}.\n\n"
+            f"API message: {e.message}\n\n"
+            "Try the screener without `include=` to see basic results, or upgrade your "
+            "plan to access cross-dataset enrichment."
         )
     except ThesmaError as e:
         return str(e)
