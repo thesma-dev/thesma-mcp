@@ -149,6 +149,12 @@ Get your API key at [portal.thesma.dev](https://portal.thesma.dev) (free tier: 2
 |------|-------------|
 | `search_filings` | Search SEC filings by company, type (10-K, 10-Q, 8-K, etc.), and date range |
 
+### Filing Section Search
+
+| Tool | Description |
+|------|-------------|
+| `search_filing_sections` | Semantic search of SEC filing section content (Risk Factors, MD&A, etc.) by natural-language query — optionally scoped by ticker, filing type, section type, year, or similarity threshold |
+
 ### Industry Lookup
 
 | Tool | Description |
