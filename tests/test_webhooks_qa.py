@@ -364,9 +364,17 @@ async def test_create_webhook_empty_string_description_normalized() -> None:
 
 @pytest.mark.asyncio
 async def test_create_webhook_402_renders_upgrade_message() -> None:
-    """402 ThesmaError surfaces the Starter+ upgrade message instead of raw error."""
+    """402 PaymentRequiredError surfaces the Starter+ upgrade message instead of raw error."""
+    from thesma.errors import PaymentRequiredError
+
     ctx = _make_ctx()
-    sdk_mock = AsyncMock(side_effect=ThesmaError("Payment required", status_code=402))
+    sdk_mock = AsyncMock(
+        side_effect=PaymentRequiredError(
+            "Payment required",
+            status_code=402,
+            error_code="plan_cap_exceeded",
+        )
+    )
     ctx.request_context.lifespan_context.client.webhooks.create = sdk_mock
 
     result = await create_webhook(
