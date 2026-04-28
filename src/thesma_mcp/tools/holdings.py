@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC
 from typing import Any
 
@@ -10,8 +11,9 @@ from thesma.client import AsyncThesmaClient
 from thesma.errors import ThesmaError
 
 from thesma_mcp.formatters import format_currency, format_number, format_table
-from thesma_mcp.resolver import CIK_PATTERN
 from thesma_mcp.server import AppContext, get_client, mcp
+
+_CIK_PATTERN = re.compile(r"^0\d{9}$")
 
 
 def _get_ctx(ctx: Context[Any, AppContext, Any]) -> AppContext:
@@ -20,7 +22,7 @@ def _get_ctx(ctx: Context[Any, AppContext, Any]) -> AppContext:
 
 async def _resolve_fund_cik(client: AsyncThesmaClient, fund_name: str) -> str:
     """Resolve a fund name or CIK to a CIK string."""
-    if CIK_PATTERN.match(fund_name):
+    if _CIK_PATTERN.match(fund_name):
         return fund_name
 
     response = await client.holdings.funds(search=fund_name)  # type: ignore[misc]
@@ -72,9 +74,12 @@ async def search_funds(
 @mcp.tool(
     description=(
         "Get which institutional funds hold a company's stock. "
-        "Shows shares held, market value, and discretion type. Accepts ticker or CIK. "
+        "Shows shares held, market value, and discretion type. "
         "Response rows carry the 13F report_quarter and filed_at timestamp; "
-        "when quarter is omitted the API returns the latest available quarter."
+        "when quarter is omitted the API returns the latest available quarter. "
+        "Args:\n"
+        "    ticker: Stock ticker (e.g. 'AAPL'), 10-digit CIK ('0000320193'), stripped CIK "
+        "('320193'), or historical ticker ('FB' resolves to META)."
     )
 )
 async def get_institutional_holders(
@@ -84,17 +89,14 @@ async def get_institutional_holders(
     limit: int = 20,
 ) -> str:
     """Get institutional holders of a company's stock."""
-    app = _get_ctx(ctx)
+    if not ticker.strip():
+        return "Invalid ticker — must be non-empty."
+
     client = get_client(ctx)
     limit = min(limit, 50)
 
     try:
-        cik = await app.resolver.resolve(ticker, client=client)
-    except ThesmaError as e:
-        return str(e)
-
-    try:
-        response = await client.holdings.holders(cik, quarter=quarter, per_page=limit)  # type: ignore[misc]
+        response = await client.holdings.holders(ticker, quarter=quarter, per_page=limit)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
@@ -106,7 +108,7 @@ async def get_institutional_holders(
 
     # Try to get company name from a separate lookup
     try:
-        company_resp = await client.companies.get(cik)  # type: ignore[misc]
+        company_resp = await client.companies.get(ticker)  # type: ignore[misc]
         comp_data = company_resp.data
         company_name = getattr(comp_data, "name", ticker.upper())
         company_ticker_str = getattr(comp_data, "ticker", ticker.upper())
@@ -226,7 +228,10 @@ async def get_fund_holdings(
     description=(
         "Get quarter-over-quarter changes in institutional holdings. "
         "Use 'ticker' to see which funds are buying/selling a company, "
-        "or 'fund_name' to see what a fund is buying/selling. Provide exactly one."
+        "or 'fund_name' to see what a fund is buying/selling. Provide exactly one. "
+        "Args:\n"
+        "    ticker: Stock ticker (e.g. 'AAPL'), 10-digit CIK ('0000320193'), stripped CIK "
+        "('320193'), or historical ticker ('FB' resolves to META)."
     )
 )
 async def get_holding_changes(
@@ -244,17 +249,12 @@ async def get_holding_changes(
             "Use ticker to see which funds changed positions, or fund_name to see what positions changed."
         )
 
-    app = _get_ctx(ctx)
     client = get_client(ctx)
     limit = min(limit, 50)
 
     if ticker:
         try:
-            cik = await app.resolver.resolve(ticker, client=client)
-        except ThesmaError as e:
-            return str(e)
-        try:
-            response = await client.holdings.holder_changes(cik, per_page=limit)  # type: ignore[misc]
+            response = await client.holdings.holder_changes(ticker, per_page=limit)  # type: ignore[misc]
         except ThesmaError as e:
             return str(e)
         return _format_changes_by_ticker(response, ticker)

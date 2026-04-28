@@ -18,7 +18,10 @@ def _get_ctx(ctx: Context[Any, AppContext, Any]) -> AppContext:
 @mcp.tool(
     description=(
         "Search SEC filings by company, type (10-K, 10-Q, 8-K, 4, DEF 14A, 13F-HR), and date range. "
-        "Returns filing metadata with accession numbers."
+        "Returns filing metadata with accession numbers. "
+        "Args:\n"
+        "    ticker: Stock ticker (e.g. 'AAPL'), 10-digit CIK ('0000320193'), stripped CIK "
+        "('320193'), or historical ticker ('FB' resolves to META). Omit to search all companies."
     )
 )
 async def search_filings(
@@ -30,17 +33,27 @@ async def search_filings(
     limit: int = 20,
 ) -> str:
     """Search SEC filings by company, type, and date range."""
-    app = _get_ctx(ctx)
+    if ticker is not None and not ticker.strip():
+        return "Invalid ticker — must be non-empty (or omit to search across all companies)."
+
     client = get_client(ctx)
     limit = min(limit, 50)
 
+    # Option B: filings.list_all is the cross-company `?cik=` query filter (NOT renamed
+    # by SDK-40; query param does not resolve ticker). When the caller passes a ticker,
+    # call companies.get(ticker) first to derive the canonical CIK, then forward as cik=.
+    # The companies.get response is also reused for display-name enrichment in the title
+    # (replaces the second companies.get(cik) call that lived here pre-MCP-36).
     cik: str | None = None
+    comp_data: Any | None = None
 
     if ticker:
         try:
-            cik = await app.resolver.resolve(ticker, client=client)
+            company_resp = await client.companies.get(ticker)  # type: ignore[misc]
         except ThesmaError as e:
             return str(e)
+        comp_data = company_resp.data
+        cik = getattr(comp_data, "cik", None)
 
     try:
         response = await client.filings.list_all(  # type: ignore[misc]
@@ -59,19 +72,11 @@ async def search_filings(
     if not filings:
         return "No filings found matching the search criteria."
 
-    # Build title
-    if ticker and filings:
-        title = f"SEC Filings ({len(filings)} of {total:,})"
-        # Attempt to resolve company name from a separate lookup
-        if cik:
-            try:
-                company_resp = await client.companies.get(cik)  # type: ignore[misc]
-                comp_data = company_resp.data
-                comp_name = getattr(comp_data, "name", ticker.upper())
-                comp_ticker = getattr(comp_data, "ticker", ticker.upper())
-                title = f"{comp_name} ({comp_ticker}) — SEC Filings ({len(filings)} of {total:,})"
-            except ThesmaError:
-                title = f"{ticker.upper()} — SEC Filings ({len(filings)} of {total:,})"
+    # Build title — reuse comp_data fetched above instead of a second companies.get call.
+    if ticker and comp_data is not None:
+        comp_name = getattr(comp_data, "name", ticker.upper())
+        comp_ticker = getattr(comp_data, "ticker", ticker.upper())
+        title = f"{comp_name} ({comp_ticker}) — SEC Filings ({len(filings)} of {total:,})"
     else:
         title = f"SEC Filings ({len(filings)} of {total:,})"
 

@@ -82,7 +82,7 @@ class TestGetCompanyPerRequestClient:
     """Verify get_company uses per-request client from get_client(ctx)."""
 
     async def test_uses_per_request_client(self) -> None:
-        """get_company should use per-request client for API calls, not app.client."""
+        """get_company should use per-request client for the companies.get call, not app.client."""
         mock_client = _make_mock_client()
         ctx = _make_ctx_with_mock_client(mock_client)
         app = ctx.request_context.lifespan_context
@@ -106,17 +106,13 @@ class TestGetCompanyPerRequestClient:
 
             result = await get_company("AAPL", ctx)
 
-        # The per-request mock client should have been used for the API call
+        # The per-request mock client should have been used for the API call.
+        # Post-MCP-36 the tool calls companies.get(ticker) directly — the api
+        # resolves ticker to canonical CIK server-side via the path-param identifier.
         mock_client.companies.get.assert_called_once()
+        assert mock_client.companies.get.call_args.args[0] == "AAPL"
         # The app.client should NOT have been used for companies.get
         app.client.companies.get.assert_not_called()
-        # The resolver should have received the client parameter
-        app.resolver.resolve.assert_called_once()
-        resolve_call = app.resolver.resolve.call_args
-        # Spec says: pass client to app.resolver.resolve(ticker, client=client)
-        assert resolve_call.kwargs.get("client") is mock_client or (
-            len(resolve_call.args) > 1 and resolve_call.args[1] is mock_client
-        ), "resolver.resolve should receive the per-request client"
 
         # Should return formatted output
         assert "Apple Inc." in result

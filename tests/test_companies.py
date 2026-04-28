@@ -163,11 +163,55 @@ class TestGetCompany:
     async def test_unknown_ticker(self, mock_ctx: MagicMock) -> None:
         """get_company with unknown ticker returns error message."""
         app = _app(mock_ctx)
-        app.resolver.resolve = AsyncMock(
-            side_effect=ThesmaError("No company found for ticker 'ZZZZ'. Try searching with search_companies.")
-        )
+        app.client.companies.get = AsyncMock(side_effect=ThesmaError("Company 'ZZZZ' not found."))
         result = await get_company("ZZZZ", mock_ctx)
-        assert "No company found" in result
+        assert "ZZZZ" in result
+
+    async def test_accepts_stripped_cik(self, mock_ctx: MagicMock) -> None:
+        """MCP-36: stripped CIK ('320193') is forwarded as-is; api resolves server-side.
+
+        Pre-MCP-36 the resolver's CIK_PATTERN only matched 10-digit zero-padded CIKs,
+        so '320193' fell into the ticker branch, returned empty, and raised. Post-MCP-36
+        the input string is passed directly to companies.get(identifier=...), which the
+        api accepts (path-param identifier auto-zero-pads on numeric-only input).
+        """
+        app = _app(mock_ctx)
+        get_mock = AsyncMock(
+            return_value=_make_data_response(
+                {
+                    "cik": "0000320193",
+                    "ticker": "AAPL",
+                    "name": "Apple Inc.",
+                }
+            )
+        )
+        app.client.companies.get = get_mock
+        result = await get_company("320193", mock_ctx)
+        assert "Apple Inc." in result
+        assert get_mock.call_args.args[0] == "320193"
+
+    async def test_accepts_stale_ticker(self, mock_ctx: MagicMock) -> None:
+        """MCP-36: stale ticker ('FB') is forwarded as-is; api's TickerAlias resolves to META.
+
+        Pre-MCP-36 the resolver called companies.list(ticker='FB') which is exact-match
+        and returned empty (no TickerAlias on the cross-company list endpoint), raising.
+        Post-MCP-36 the input string is passed directly to companies.get(identifier='FB'),
+        which the api routes through TickerAlias and returns META's data.
+        """
+        app = _app(mock_ctx)
+        get_mock = AsyncMock(
+            return_value=_make_data_response(
+                {
+                    "cik": "0001326801",
+                    "ticker": "META",
+                    "name": "Meta Platforms, Inc.",
+                }
+            )
+        )
+        app.client.companies.get = get_mock
+        result = await get_company("FB", mock_ctx)
+        assert "Meta Platforms" in result
+        assert get_mock.call_args.args[0] == "FB"
 
     async def test_get_company_includes_labor_context(self, mock_ctx: MagicMock) -> None:
         """get_company with full labor_context renders all 3 sub-sections."""

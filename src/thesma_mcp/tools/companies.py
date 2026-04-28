@@ -182,7 +182,7 @@ def _validate_include(include: str) -> str | None:
     return None
 
 
-def _format_company_header(data: Any, ticker: str, cik: str) -> list[str]:
+def _format_company_header(data: Any, ticker: str) -> list[str]:
     """Render the CIK / SIC / Index / Exchange / Domicile / Fiscal Year End block."""
     name = getattr(data, "name", "Unknown")
     tkr = getattr(data, "ticker", ticker.upper())
@@ -191,7 +191,7 @@ def _format_company_header(data: Any, ticker: str, cik: str) -> list[str]:
     tier_raw = getattr(data, "company_tier", "")
     tier = str(tier_raw.value) if hasattr(tier_raw, "value") else str(tier_raw or "")
     fiscal_year_end = getattr(data, "fiscal_year_end", "")
-    data_cik = getattr(data, "cik", cik)
+    data_cik = getattr(data, "cik", "")
 
     sic_line = f"{sic_code} — {sic_description}" if sic_description else str(sic_code)
 
@@ -216,7 +216,10 @@ def _format_company_header(data: Any, ticker: str, cik: str) -> list[str]:
         "insider trades, institutional holders, 8-K corporate events, executive compensation, board, "
         "labor market context, or SBA lending context. Pass include='financials,ratios,events' "
         "(comma-separated) to compose exactly what you need. Default includes labor_context + "
-        "lending_context for the company profile view."
+        "lending_context for the company profile view. "
+        "Args:\n"
+        "    ticker: Stock ticker (e.g. 'AAPL'), 10-digit CIK ('0000320193'), stripped CIK "
+        "('320193'), or historical ticker ('FB' resolves to META)."
     )
 )
 async def get_company(
@@ -225,13 +228,10 @@ async def get_company(
     include: str | None = None,
 ) -> str:
     """Get details for a single company, optionally composing sub-resources."""
-    app = _get_ctx(ctx)
-    client = get_client(ctx)
+    if not ticker.strip():
+        return "Invalid ticker — must be non-empty."
 
-    try:
-        cik = await app.resolver.resolve(ticker, client=client)
-    except ThesmaError as e:
-        return str(e)
+    client = get_client(ctx)
 
     # When include is None, fall back to the pre-MCP-26 default for
     # backwards compatibility (labor_context + lending_context).
@@ -248,14 +248,14 @@ async def get_company(
     requested: set[str] = {t.strip() for t in resolved_include.split(",") if t.strip()}
 
     try:
-        result = await client.companies.get(cik, include=resolved_include)  # type: ignore[misc]
+        result = await client.companies.get(ticker, include=resolved_include)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
     data = result.data
     extra: dict[str, Any] = getattr(data, "model_extra", None) or {}
 
-    lines = _format_company_header(data, ticker, cik)
+    lines = _format_company_header(data, ticker)
 
     for slot_name in INCLUDE_RENDER_ORDER:
         if slot_name not in requested:

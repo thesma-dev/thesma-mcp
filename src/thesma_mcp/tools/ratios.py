@@ -103,7 +103,10 @@ def _get_ctx(ctx: Context[Any, AppContext, Any]) -> AppContext:
 @mcp.tool(
     description=(
         "Get computed financial ratios (margins, returns, leverage, growth) for a US public company. "
-        "Derived from SEC filings."
+        "Derived from SEC filings. "
+        "Args:\n"
+        "    ticker: Stock ticker (e.g. 'AAPL'), 10-digit CIK ('0000320193'), stripped CIK "
+        "('320193'), or historical ticker ('FB' resolves to META)."
     )
 )
 async def get_ratios(
@@ -114,20 +117,17 @@ async def get_ratios(
     quarter: int | None = None,
 ) -> str:
     """Get financial ratios for a company."""
+    if not ticker.strip():
+        return "Invalid ticker — must be non-empty."
+
     validation_error = _validate_period_quarter(period, quarter)
     if validation_error:
         return validation_error
 
-    app = _get_ctx(ctx)
     client = get_client(ctx)
 
     try:
-        cik = await app.resolver.resolve(ticker, client=client)
-    except ThesmaError as e:
-        return str(e)
-
-    try:
-        result = await client.ratios.get(cik, period=period, year=year, quarter=quarter)  # type: ignore[misc]
+        result = await client.ratios.get(ticker, period=period, year=year, quarter=quarter)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
@@ -167,7 +167,10 @@ async def get_ratios(
     description=(
         "Get a single financial ratio over time. Returns a time series for trend analysis. "
         "Valid ratios: gross_margin, operating_margin, net_margin, return_on_equity, return_on_assets, "
-        "debt_to_equity, current_ratio, interest_coverage, revenue_growth_yoy, net_income_growth_yoy, eps_growth_yoy."
+        "debt_to_equity, current_ratio, interest_coverage, revenue_growth_yoy, net_income_growth_yoy, eps_growth_yoy. "
+        "Args:\n"
+        "    ticker: Stock ticker (e.g. 'AAPL'), 10-digit CIK ('0000320193'), stripped CIK "
+        "('320193'), or historical ticker ('FB' resolves to META)."
     )
 )
 async def get_ratio_history(
@@ -179,19 +182,15 @@ async def get_ratio_history(
     to_year: int | None = None,
 ) -> str:
     """Get a single ratio over time."""
+    if not ticker.strip():
+        return "Invalid ticker — must be non-empty."
     if ratio not in VALID_RATIOS:
         return f"Invalid ratio '{ratio}'. Valid ratios are: {', '.join(sorted(VALID_RATIOS))}"
 
-    app = _get_ctx(ctx)
     client = get_client(ctx)
 
     try:
-        cik = await app.resolver.resolve(ticker, client=client)
-    except ThesmaError as e:
-        return str(e)
-
-    try:
-        result = await client.ratios.time_series(cik, ratio, period=period, from_year=from_year, to_year=to_year)  # type: ignore[misc]
+        result = await client.ratios.time_series(ticker, ratio, period=period, from_year=from_year, to_year=to_year)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 

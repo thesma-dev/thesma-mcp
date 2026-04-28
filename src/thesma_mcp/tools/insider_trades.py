@@ -9,7 +9,7 @@ from mcp.server.fastmcp import Context
 from thesma.errors import ThesmaError
 
 from thesma_mcp.formatters import format_currency, format_table
-from thesma_mcp.server import AppContext, get_client, mcp
+from thesma_mcp.server import get_client, mcp
 
 VALID_TYPES = frozenset({"purchase", "sale", "grant", "exercise"})
 
@@ -95,7 +95,10 @@ def _format_price_or_range(trade: Any) -> str:
         "Use ticker to scope to one company, or omit to search across all companies. "
         "Filter by transaction type, minimum value, and date range. "
         "By default, rows are aggregated transaction events (same-day 10b5-1 tranches collapsed on "
-        "person/date/type/security/ownership). Pass flat=True for the per-slice Form 4 rows."
+        "person/date/type/security/ownership). Pass flat=True for the per-slice Form 4 rows. "
+        "Args:\n"
+        "    ticker: Stock ticker (e.g. 'AAPL'), 10-digit CIK ('0000320193'), stripped CIK "
+        "('320193'), or historical ticker ('FB' resolves to META). Omit to search all companies."
     )
 )
 async def get_insider_trades(
@@ -109,7 +112,6 @@ async def get_insider_trades(
     limit: int = 20,
 ) -> str:
     """Get insider trading transactions from Form 4."""
-    app: AppContext = ctx.request_context.lifespan_context
     client = get_client(ctx)
 
     # Treat empty/whitespace ticker as None
@@ -136,9 +138,8 @@ async def get_insider_trades(
     company_ticker: str | None = None
     try:
         if ticker:
-            cik = await app.resolver.resolve(ticker, client=client)
             response = await client.insider_trades.list(  # type: ignore[misc]
-                cik,
+                ticker,
                 from_date=from_date,
                 to_date=to_date,
                 trade_type=type,

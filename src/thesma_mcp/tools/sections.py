@@ -30,7 +30,10 @@ def _empty_to_none(value: str | None) -> str | None:
         "etc.) using natural-language queries. Returns matching text excerpts ranked by "
         "cosine similarity. Optionally scope by ticker (one company), filing_type (e.g. "
         "'10-K'), section_type (e.g. 'item_1a' for Risk Factors, 'item_7' for MD&A), "
-        "fiscal year, or minimum similarity threshold."
+        "fiscal year, or minimum similarity threshold. "
+        "Args:\n"
+        "    ticker: Stock ticker (e.g. 'AAPL'), 10-digit CIK ('0000320193'), stripped CIK "
+        "('320193'), or historical ticker ('FB' resolves to META). Omit to search all companies."
     )
 )
 async def search_filing_sections(
@@ -44,7 +47,6 @@ async def search_filing_sections(
     limit: int = 20,
 ) -> str:
     """Semantic search of SEC filing section content."""
-    app = _get_ctx(ctx)
     client = get_client(ctx)
 
     if len(query.strip()) < _QUERY_MIN_CHARS:
@@ -54,12 +56,16 @@ async def search_filing_sections(
     filing_type = _empty_to_none(filing_type)
     section_type = _empty_to_none(section_type)
 
+    # Option B: sections.search is the cross-company `?cik=` query filter (NOT renamed
+    # by SDK-40; query param does not resolve ticker). When the caller passes a ticker,
+    # call companies.get(ticker) first to derive the canonical CIK, then forward as cik=.
     cik: str | None = None
     if ticker:
         try:
-            cik = await app.resolver.resolve(ticker, client=client)
+            company_resp = await client.companies.get(ticker)  # type: ignore[misc]
         except ThesmaError as e:
             return str(e)
+        cik = getattr(company_resp.data, "cik", None)
 
     limit = max(1, min(limit, _LIMIT_CAP))
 

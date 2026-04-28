@@ -53,18 +53,18 @@ def _make_ctx() -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_events_with_ticker() -> None:
-    """get_events with ticker scopes to company endpoint."""
+    """get_events with ticker scopes to company endpoint, forwarding ticker as identifier."""
     ctx = _make_ctx()
     events = [_make_event(), _make_event(category="governance", company_ticker="AAPL")]
     resp = _make_paginated_response(events, total=2)
-    ctx.request_context.lifespan_context.client.events.list = AsyncMock(return_value=resp)
+    list_mock = AsyncMock(return_value=resp)
+    ctx.request_context.lifespan_context.client.events.list = list_mock
 
     result = await get_events(ctx, ticker="AAPL")
 
     assert "Apple Inc. (AAPL)" in result
-    resolve_mock = ctx.request_context.lifespan_context.resolver.resolve
-    resolve_mock.assert_called_once()
-    assert resolve_mock.call_args[0][0] == "AAPL"
+    list_mock.assert_called_once()
+    assert list_mock.call_args.args[0] == "AAPL"
 
 
 @pytest.mark.asyncio

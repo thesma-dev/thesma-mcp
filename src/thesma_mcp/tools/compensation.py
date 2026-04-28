@@ -18,7 +18,10 @@ def _get_ctx(ctx: Context[Any, AppContext, Any]) -> AppContext:
 @mcp.tool(
     description=(
         "Get executive compensation (salary, bonus, stock awards, total) from proxy statements. "
-        "Includes CEO-to-median pay ratio when available. Accepts ticker or CIK."
+        "Includes CEO-to-median pay ratio when available. "
+        "Args:\n"
+        "    ticker: Stock ticker (e.g. 'AAPL'), 10-digit CIK ('0000320193'), stripped CIK "
+        "('320193'), or historical ticker ('FB' resolves to META)."
     )
 )
 async def get_executive_compensation(
@@ -27,16 +30,13 @@ async def get_executive_compensation(
     year: int | None = None,
 ) -> str:
     """Get named executive officer compensation."""
-    app = _get_ctx(ctx)
+    if not ticker.strip():
+        return "Invalid ticker — must be non-empty."
+
     client = get_client(ctx)
 
     try:
-        cik = await app.resolver.resolve(ticker, client=client)
-    except ThesmaError as e:
-        return str(e)
-
-    try:
-        result = await client.compensation.get(cik, year=year)  # type: ignore[misc]
+        result = await client.compensation.get(ticker, year=year)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
@@ -122,7 +122,10 @@ async def get_executive_compensation(
 @mcp.tool(
     description=(
         "Get board of directors (name, age, tenure, independence, committee memberships) "
-        "from proxy statements. Accepts ticker or CIK."
+        "from proxy statements. "
+        "Args:\n"
+        "    ticker: Stock ticker (e.g. 'AAPL'), 10-digit CIK ('0000320193'), stripped CIK "
+        "('320193'), or historical ticker ('FB' resolves to META)."
     )
 )
 async def get_board_members(
@@ -131,16 +134,13 @@ async def get_board_members(
     year: int | None = None,
 ) -> str:
     """Get board of directors from proxy statements."""
-    app = _get_ctx(ctx)
+    if not ticker.strip():
+        return "Invalid ticker — must be non-empty."
+
     client = get_client(ctx)
 
     try:
-        cik = await app.resolver.resolve(ticker, client=client)
-    except ThesmaError as e:
-        return str(e)
-
-    try:
-        result = await client.compensation.board(cik)  # type: ignore[misc]
+        result = await client.compensation.board(ticker)  # type: ignore[misc]
     except ThesmaError as e:
         return str(e)
 
