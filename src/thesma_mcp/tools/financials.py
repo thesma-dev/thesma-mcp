@@ -144,7 +144,10 @@ def _validate_years(years: int | None, year: int | None, quarter: int | None) ->
         "US public company from SEC filings. Pass statement='all' to get all three in one call or "
         "years=N (1-10) to get the last N annual periods for trend analysis. "
         "Responses carry taxonomy ('us-gaap' or 'ifrs-full'), native-reported currency, and "
-        "presentation-format metadata."
+        "presentation-format metadata. "
+        "Args:\n"
+        "    ticker: Stock ticker (e.g. 'AAPL'), 10-digit CIK ('0000320193'), stripped CIK "
+        "('320193'), or historical ticker ('FB' resolves to META)."
     )
 )
 async def get_financials(
@@ -157,6 +160,9 @@ async def get_financials(
     years: int | None = None,
 ) -> str:
     """Get financial statements for a company."""
+    if not ticker.strip():
+        return "Invalid ticker — must be non-empty."
+
     # `years` validation runs BEFORE `period/quarter` validation — if the user
     # passed years=5 alongside period="quarterly" their intent is clearly
     # multi-period; the more helpful error is the years-specific mutual-exclusion
@@ -170,22 +176,16 @@ async def get_financials(
         if validation_error:
             return validation_error
 
-    app = _get_ctx(ctx)
     client = get_client(ctx)
-
-    try:
-        cik = await app.resolver.resolve(ticker, client=client)
-    except ThesmaError as e:
-        return str(e)
 
     try:
         if years is not None:
             result = await client.financials.get(  # type: ignore[misc]
-                cik, statement=statement, period=period, per_page=years
+                ticker, statement=statement, period=period, per_page=years
             )
         else:
             result = await client.financials.get(  # type: ignore[misc]
-                cik, statement=statement, period=period, year=year, quarter=quarter
+                ticker, statement=statement, period=period, year=year, quarter=quarter
             )
     except ThesmaError as e:
         return str(e)
@@ -514,7 +514,10 @@ def _format_multi_statement_history(result: Any, ticker: str) -> str:
         "total_liabilities, current_liabilities, accounts_payable, short_term_debt, "
         "non_current_liabilities, long_term_debt, total_equity, common_shares_outstanding. "
         "Cash flow: operating_cash_flow, investing_cash_flow, financing_cash_flow, "
-        "net_change_in_cash, capital_expenditures, dividends_paid, share_repurchases."
+        "net_change_in_cash, capital_expenditures, dividends_paid, share_repurchases. "
+        "Args:\n"
+        "    ticker: Stock ticker (e.g. 'AAPL'), 10-digit CIK ('0000320193'), stripped CIK "
+        "('320193'), or historical ticker ('FB' resolves to META)."
     )
 )
 async def get_financial_metric(
@@ -526,20 +529,16 @@ async def get_financial_metric(
     to_year: int | None = None,
 ) -> str:
     """Get a single financial metric over time."""
+    if not ticker.strip():
+        return "Invalid ticker — must be non-empty."
     if metric not in VALID_METRICS:
         return f"Invalid metric '{metric}'. Valid metrics are: {', '.join(sorted(VALID_METRICS))}"
 
-    app = _get_ctx(ctx)
     client = get_client(ctx)
 
     try:
-        cik = await app.resolver.resolve(ticker, client=client)
-    except ThesmaError as e:
-        return str(e)
-
-    try:
         result = await client.financials.time_series(  # type: ignore[misc]
-            cik, metric, period=period, from_year=from_year, to_year=to_year
+            ticker, metric, period=period, from_year=from_year, to_year=to_year
         )
     except ThesmaError as e:
         return str(e)

@@ -47,8 +47,15 @@ def _make_response(results: list[MagicMock], has_more: bool = False) -> MagicMoc
 def _make_ctx() -> MagicMock:
     app = MagicMock()
     app.client = MagicMock()
-    app.resolver = AsyncMock()
-    app.resolver.resolve = AsyncMock(return_value="0000320193")
+    # Default companies.get response — the Option B path resolves ticker→CIK via
+    # client.companies.get(identifier=ticker) post-MCP-36, then forwards data.cik
+    # as cik= to sections.search.
+    company_resp = MagicMock()
+    company_data = MagicMock()
+    company_data.cik = "0000320193"
+    company_resp.data = company_data
+    app.client.companies = MagicMock()
+    app.client.companies.get = AsyncMock(return_value=company_resp)
     app.client.sections = MagicMock()
     app.client.sections.search = AsyncMock()
     ctx = MagicMock()
@@ -77,15 +84,16 @@ async def test_search_filing_sections_basic() -> None:
 
 @pytest.mark.asyncio
 async def test_search_filing_sections_with_ticker_resolves_cik() -> None:
-    """Ticker is resolved to CIK and forwarded as cik=."""
+    """Ticker is resolved to canonical CIK via companies.get (Option B) and forwarded as cik=."""
     ctx = _make_ctx()
     sdk_mock = AsyncMock(return_value=_make_response([_make_result()]))
     ctx.request_context.lifespan_context.client.sections.search = sdk_mock
 
     await search_filing_sections(ctx, query="risk", ticker="AAPL")
 
-    ctx.request_context.lifespan_context.resolver.resolve.assert_called_once()
-    assert ctx.request_context.lifespan_context.resolver.resolve.call_args[0][0] == "AAPL"
+    companies_get_mock = ctx.request_context.lifespan_context.client.companies.get
+    companies_get_mock.assert_called_once()
+    assert companies_get_mock.call_args.args[0] == "AAPL"
     kwargs = sdk_mock.call_args.kwargs
     assert kwargs["cik"] == "0000320193"
 
@@ -129,7 +137,7 @@ async def test_search_filing_sections_empty_string_filters_normalized() -> None:
     assert kwargs["cik"] is None
     assert kwargs["filing_type"] is None
     assert kwargs["section_type"] is None
-    ctx.request_context.lifespan_context.resolver.resolve.assert_not_called()
+    ctx.request_context.lifespan_context.client.companies.get.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -224,12 +232,14 @@ async def test_search_filing_sections_thesma_error_surfaces() -> None:
 
 
 @pytest.mark.asyncio
-async def test_search_filing_sections_resolver_error_surfaces() -> None:
-    """Resolver failure (unknown ticker) returns the ThesmaError message; SDK is not called."""
+async def test_search_filing_sections_companies_get_error_surfaces() -> None:
+    """companies.get failure (unknown ticker) returns the ThesmaError message; sections.search is not called."""
     from thesma.errors import ThesmaError
 
     ctx = _make_ctx()
-    ctx.request_context.lifespan_context.resolver.resolve = AsyncMock(side_effect=ThesmaError("Unknown ticker: ZZZZ"))
+    ctx.request_context.lifespan_context.client.companies.get = AsyncMock(
+        side_effect=ThesmaError("Company 'ZZZZ' not found.")
+    )
     sdk_mock = AsyncMock()
     ctx.request_context.lifespan_context.client.sections.search = sdk_mock
 

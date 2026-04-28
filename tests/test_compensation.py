@@ -198,7 +198,9 @@ class TestGetExecutiveCompensation:
     async def test_api_error(self) -> None:
         """get_executive_compensation passes through API error."""
         ctx = _make_ctx()
-        ctx.request_context.lifespan_context.resolver.resolve = AsyncMock(side_effect=ThesmaError("Company not found"))
+        ctx.request_context.lifespan_context.client.compensation.get = AsyncMock(
+            side_effect=ThesmaError("Company not found")
+        )
         result = await get_executive_compensation("ZZZZ", ctx)
         assert "Company not found" in result
 

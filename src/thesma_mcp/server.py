@@ -20,8 +20,6 @@ from starlette.responses import HTMLResponse, JSONResponse, Response
 from thesma.client import AsyncThesmaClient
 from thesma.errors import ThesmaError
 
-from thesma_mcp.resolver import TickerResolver
-
 logger = logging.getLogger("thesma_mcp")
 
 
@@ -30,7 +28,6 @@ class AppContext:
     """Application context holding shared resources."""
 
     client: AsyncThesmaClient | None
-    resolver: TickerResolver
 
 
 @asynccontextmanager
@@ -43,17 +40,15 @@ async def app_lifespan(server: Any) -> AsyncIterator[AppContext]:
 
     if has_key:
         client: AsyncThesmaClient | None = AsyncThesmaClient(api_key=api_key)
-        resolver = TickerResolver(client)
         if transport == "http":
             logger.info("Default API key configured — unauthenticated requests will use free tier")
     else:
         client = None
-        resolver = TickerResolver(None)
         if transport == "http":
             logger.info("No default API key — all requests require Authorization header")
 
     try:
-        yield AppContext(client=client, resolver=resolver)
+        yield AppContext(client=client)
     finally:
         if client:
             await client.close()

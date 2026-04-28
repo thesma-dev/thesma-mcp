@@ -9,7 +9,7 @@ from mcp.server.fastmcp import Context
 from thesma.errors import ThesmaError
 
 from thesma_mcp.formatters import format_table
-from thesma_mcp.server import AppContext, get_client, mcp
+from thesma_mcp.server import get_client, mcp
 
 CATEGORY_LABELS: dict[str, str] = {
     "ma": "M&A",
@@ -63,7 +63,10 @@ def _event_description(event: Any) -> str:
     description=(
         "Get 8-K corporate events (earnings, M&A, leadership changes, material agreements). "
         "Use ticker to scope to one company, or omit to search across all companies. "
-        "Filter by category and date range."
+        "Filter by category and date range. "
+        "Args:\n"
+        "    ticker: Stock ticker (e.g. 'AAPL'), 10-digit CIK ('0000320193'), stripped CIK "
+        "('320193'), or historical ticker ('FB' resolves to META). Omit to search all companies."
     )
 )
 async def get_events(
@@ -75,7 +78,6 @@ async def get_events(
     limit: int = 20,
 ) -> str:
     """Get 8-K corporate events."""
-    app: AppContext = ctx.request_context.lifespan_context
     client = get_client(ctx)
 
     # Treat empty/whitespace ticker as None
@@ -102,9 +104,8 @@ async def get_events(
     company_ticker: str | None = None
     try:
         if ticker:
-            cik = await app.resolver.resolve(ticker, client=client)
             response = await client.events.list(  # type: ignore[misc]
-                cik, from_date=from_date, to_date=to_date, category=category, per_page=limit
+                ticker, from_date=from_date, to_date=to_date, category=category, per_page=limit
             )
             # Get company info from the first event if available
             if response.data:
