@@ -97,6 +97,19 @@ def _build_summary_header(params: dict[str, Any]) -> str:
         parts.append("S&P 500")
     elif tier == "russell1000":
         parts.append("Russell 1000")
+    elif tier == "russell2000":
+        parts.append("Russell 2000")
+    elif tier == "russell3000":
+        # Request-side superset; api expands to sp500 ∪ russell1000 ∪ russell2000
+        # server-side. Never appears in a row's company_tier field — only as a
+        # filter param.
+        parts.append("Russell 3000 (sp500 + russell1000 + russell2000)")
+
+    in_index = params.get("in_index")
+    if in_index is True:
+        parts.append("in any Russell index")
+    elif in_index is False:
+        parts.append("not in any Russell index")
 
     sic = params.get("sic")
     if sic:
@@ -415,7 +428,12 @@ def _get_lending_context(lc: Any) -> dict[str, Any] | None:
         "excluded by the screener inner-join). "
         "Filter by taxonomy='us-gaap' or 'ifrs-full' and/or by presentation currency via "
         "currency='<ISO-4217 code>' (case-insensitive, e.g. 'USD', 'EUR', 'JPY'); both are "
-        "server-validated — unknown values return 400."
+        "server-validated — unknown values return 400. "
+        "Filter by Russell-index membership: in_index=True returns only "
+        "companies in any tracked index (sp500, russell1000, or russell2000); "
+        "in_index=False returns only unindexed companies. Note: combining "
+        "in_index=False with a query that matches an indexed ticker (e.g. "
+        "'AAPL') returns no results because the ticker is filtered out."
     )
 )
 async def screen_companies(
@@ -434,6 +452,7 @@ async def screen_companies(
     min_current_ratio: float | None = None,
     min_interest_coverage: float | None = None,
     tier: str | None = None,
+    in_index: bool | None = None,
     sic: str | None = None,
     exchange: str | None = None,
     domicile: str | None = None,
@@ -494,6 +513,7 @@ async def screen_companies(
         "min_current_ratio": min_current_ratio,
         "min_interest_coverage": min_interest_coverage,
         "tier": tier,
+        "in_index": in_index,
         "sic": sic,
         "exchange": exchange,
         "domicile": domicile,
@@ -547,6 +567,7 @@ async def screen_companies(
             min_current_ratio=min_current_ratio,
             min_interest_coverage=min_interest_coverage,
             tier=tier,
+            in_index=in_index,
             sic=sic,
             exchange=_parse_exchange(exchange),
             domicile=domicile,
