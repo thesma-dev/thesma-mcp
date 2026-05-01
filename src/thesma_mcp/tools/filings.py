@@ -39,11 +39,11 @@ async def search_filings(
     client = get_client(ctx)
     limit = min(limit, 50)
 
-    # Option B: filings.list_all is the cross-company `?cik=` query filter (NOT renamed
-    # by SDK-40; query param does not resolve ticker). When the caller passes a ticker,
-    # call companies.get(ticker) first to derive the canonical CIK, then forward as cik=.
-    # The companies.get response is also reused for display-name enrichment in the title
-    # (replaces the second companies.get(cik) call that lived here pre-MCP-36).
+    # filings.list_all is the cross-company query filter. Per SDK-42 (T-230)
+    # the kwarg is `identifier=`. The local `cik` variable is the canonical
+    # CIK extracted from companies.get above and is forwarded as identifier=
+    # because the api accepts CIK on this filter (alongside ticker and
+    # stripped-CIK forms).
     cik: str | None = None
     comp_data: Any | None = None
 
@@ -57,7 +57,7 @@ async def search_filings(
 
     try:
         response = await client.filings.list_all(  # type: ignore[misc]
-            cik=cik,
+            identifier=cik,
             filing_type=type,
             start_date=from_date,
             end_date=to_date,

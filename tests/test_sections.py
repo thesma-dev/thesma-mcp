@@ -49,7 +49,7 @@ def _make_ctx() -> MagicMock:
     app.client = MagicMock()
     # Default companies.get response — the Option B path resolves ticker→CIK via
     # client.companies.get(identifier=ticker) post-MCP-36, then forwards data.cik
-    # as cik= to sections.search.
+    # as identifier= to sections.search (renamed in SDK-42 / MCP-37).
     company_resp = MagicMock()
     company_data = MagicMock()
     company_data.cik = "0000320193"
@@ -84,7 +84,7 @@ async def test_search_filing_sections_basic() -> None:
 
 @pytest.mark.asyncio
 async def test_search_filing_sections_with_ticker_resolves_cik() -> None:
-    """Ticker is resolved to canonical CIK via companies.get (Option B) and forwarded as cik=."""
+    """Ticker is resolved to canonical CIK via companies.get (Option B) and forwarded as identifier=."""
     ctx = _make_ctx()
     sdk_mock = AsyncMock(return_value=_make_response([_make_result()]))
     ctx.request_context.lifespan_context.client.sections.search = sdk_mock
@@ -95,7 +95,7 @@ async def test_search_filing_sections_with_ticker_resolves_cik() -> None:
     companies_get_mock.assert_called_once()
     assert companies_get_mock.call_args.args[0] == "AAPL"
     kwargs = sdk_mock.call_args.kwargs
-    assert kwargs["cik"] == "0000320193"
+    assert kwargs["identifier"] == "0000320193"
 
 
 @pytest.mark.asyncio
@@ -117,7 +117,7 @@ async def test_search_filing_sections_forwards_all_filters() -> None:
 
     kwargs = sdk_mock.call_args.kwargs
     assert kwargs["query"] == "climate change"
-    assert kwargs["cik"] == "0000320193"
+    assert kwargs["identifier"] == "0000320193"
     assert kwargs["filing_type"] == "10-K"
     assert kwargs["section_type"] == "item_1a"
     assert kwargs["year"] == 2024
@@ -134,7 +134,7 @@ async def test_search_filing_sections_empty_string_filters_normalized() -> None:
     await search_filing_sections(ctx, query="risk", ticker="", filing_type="  ", section_type="")
 
     kwargs = sdk_mock.call_args.kwargs
-    assert kwargs["cik"] is None
+    assert kwargs["identifier"] is None
     assert kwargs["filing_type"] is None
     assert kwargs["section_type"] is None
     ctx.request_context.lifespan_context.client.companies.get.assert_not_called()

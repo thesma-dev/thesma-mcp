@@ -40,13 +40,19 @@ def _render_exchange(value: Any) -> str:
         "Use this to look up a company before querying its financials, ratios, or filings. "
         "Optional filters: taxonomy='us-gaap' or 'ifrs-full' to narrow to US-GAAP 10-K vs "
         "IFRS 20-F filers; currency='<ISO-4217 code>' (e.g. 'USD', 'EUR') to narrow by "
-        "presentation currency."
+        "presentation currency. "
+        "Filter by Russell-index membership: in_index=True returns only "
+        "companies in any tracked index (sp500, russell1000, or russell2000); "
+        "in_index=False returns only unindexed companies. Note: combining "
+        "in_index=False with a query that matches an indexed ticker (e.g. "
+        "'AAPL') returns no results because the ticker is filtered out."
     )
 )
 async def search_companies(
     query: str,
     ctx: Context[Any, AppContext, Any],
     tier: str | None = None,
+    in_index: bool | None = None,
     exchange: str | None = None,
     domicile: str | None = None,
     taxonomy: str | None = None,
@@ -77,6 +83,7 @@ async def search_companies(
         response = await client.companies.list(  # type: ignore[misc]
             search=query,
             tier=tier,
+            in_index=in_index,
             exchange=exchange_value,
             domicile=domicile,
             taxonomy=taxonomy,
@@ -122,10 +129,22 @@ def _format_company_list(companies: list[Any], query: str) -> str:
 
 
 def _tier_label(tier: str | None) -> str:
-    """Convert tier value to display label."""
+    """Convert tier value to display label.
+
+    The api-side stored tier set is ``{sp500, russell1000, russell2000, NULL}``
+    post-T-227 (govdata-api 0.13.0); the legacy unindexed enum value was
+    retired and the field is now nullable. The function accepts a normalised
+    string (``c.company_tier.value`` or the pass-through string for
+    ``ScreenerResultItem``'s ``extra='allow'`` shape) plus ``""`` / ``None``
+    for unindexed companies.
+    """
     if not tier:
-        return "Other"
-    mapping = {"sp500": "S&P 500", "russell1000": "Russell 1000"}
+        return "Not indexed"
+    mapping = {
+        "sp500": "S&P 500",
+        "russell1000": "Russell 1000",
+        "russell2000": "Russell 2000",
+    }
     return mapping.get(tier, tier)
 
 

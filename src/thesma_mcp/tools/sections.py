@@ -56,9 +56,11 @@ async def search_filing_sections(
     filing_type = _empty_to_none(filing_type)
     section_type = _empty_to_none(section_type)
 
-    # Option B: sections.search is the cross-company `?cik=` query filter (NOT renamed
-    # by SDK-40; query param does not resolve ticker). When the caller passes a ticker,
-    # call companies.get(ticker) first to derive the canonical CIK, then forward as cik=.
+    # sections.search is the cross-company query filter. Per SDK-42 (T-230)
+    # the kwarg is `identifier=`. The local `cik` variable is the canonical
+    # CIK extracted from companies.get above and is forwarded as identifier=
+    # because the api accepts CIK on this filter (alongside ticker and
+    # stripped-CIK forms).
     cik: str | None = None
     if ticker:
         try:
@@ -72,7 +74,7 @@ async def search_filing_sections(
     try:
         response = await client.sections.search(  # type: ignore[misc]
             query=query,
-            cik=cik,
+            identifier=cik,
             filing_type=filing_type,
             section_type=section_type,
             year=year,

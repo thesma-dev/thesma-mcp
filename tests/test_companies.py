@@ -15,6 +15,7 @@ from thesma_mcp.tools.companies import (
     _format_summary_model_or_dict,
     _parse_exchange,
     _render_exchange,
+    _tier_label,
     get_company,
     search_companies,
 )
@@ -1547,3 +1548,47 @@ class TestGetCompanyEventsTeaser:
         idx_events = result.index("## Recent 8-K Events")
         idx_compensation = result.index("## Executive Compensation")
         assert idx_holders < idx_events < idx_compensation
+
+
+class TestTierLabel:
+    def test_none_returns_not_indexed(self) -> None:
+        assert _tier_label(None) == "Not indexed"
+
+    def test_empty_string_returns_not_indexed(self) -> None:
+        assert _tier_label("") == "Not indexed"
+
+    def test_sp500_mapping(self) -> None:
+        assert _tier_label("sp500") == "S&P 500"
+
+    def test_russell1000_mapping(self) -> None:
+        assert _tier_label("russell1000") == "Russell 1000"
+
+    def test_russell2000_mapping(self) -> None:
+        assert _tier_label("russell2000") == "Russell 2000"
+
+
+class TestSearchCompaniesNotIndexed:
+    async def test_renders_not_indexed_for_null_company_tier(self, mock_ctx: MagicMock) -> None:
+        """Mocked companies.list returns company_tier=None — table renders 'Not indexed'."""
+        from types import SimpleNamespace
+
+        app = _app(mock_ctx)
+        empty = _make_paginated_response([])
+        # Build a row whose company_tier is None (no .value attribute) to exercise
+        # the `or ""` → _tier_label("") → "Not indexed" path.
+        unindexed_row = SimpleNamespace(
+            cik="0001234567",
+            ticker="UNDX",
+            name="Unindexed Co.",
+            company_tier=None,
+            exchange=None,
+            domicile=None,
+        )
+        name_resp = MagicMock()
+        name_resp.data = [unindexed_row]
+        name_resp.pagination = MagicMock()
+        name_resp.pagination.total = 1
+        app.client.companies.list = AsyncMock(side_effect=[empty, name_resp])
+        result = await search_companies("Unindexed", mock_ctx)
+        assert "Not indexed" in result
+        assert "Unindexed Co." in result

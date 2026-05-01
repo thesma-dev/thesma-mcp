@@ -884,7 +884,10 @@ class TestScreenerScaleConvention:
         start = source.index("@mcp.tool(")
         end = source.index(")\nasync def screen_companies")
         description_block = source[start:end]
-        assert len(description_block) < 2500, (
+        # MCP-37 added the in_index filter sentence (~340 chars). Bumped 2500→2700
+        # to accommodate the load-bearing addition; further growth should still
+        # be reviewed for cuttability before raising the cap again.
+        assert len(description_block) < 2700, (
             f"screen_companies @mcp.tool description ballooned to {len(description_block)} chars — "
             "review whether the addition is load-bearing or cuttable."
         )
@@ -965,3 +968,35 @@ async def test_screen_companies_tier_required_with_falsy_current_tier(
     result = await screen_companies(ctx, include="labor_context")
     assert "Current tier: unknown" in result
     assert "Required tier: pro" in result
+
+
+class TestScreenerInIndex:
+    @pytest.mark.asyncio
+    async def test_in_index_true_forwarded(self) -> None:
+        """screen_companies(in_index=True) forwards in_index=True to the SDK."""
+        resp = _make_paginated_response(_default_companies())
+        ctx = _make_ctx(resp)
+        await screen_companies(ctx, in_index=True)
+        kwargs = ctx.request_context.lifespan_context.client.screener.screen.call_args.kwargs
+        assert kwargs.get("in_index") is True
+
+    @pytest.mark.asyncio
+    async def test_in_index_false_forwarded(self) -> None:
+        """screen_companies(in_index=False) forwards in_index=False to the SDK.
+
+        Asserted with `is False` (not == False) to distinguish from None/0/falsey.
+        """
+        resp = _make_paginated_response(_default_companies())
+        ctx = _make_ctx(resp)
+        await screen_companies(ctx, in_index=False)
+        kwargs = ctx.request_context.lifespan_context.client.screener.screen.call_args.kwargs
+        assert kwargs.get("in_index") is False
+
+    @pytest.mark.asyncio
+    async def test_in_index_default_is_none(self) -> None:
+        """No in_index argument forwards in_index=None to the SDK."""
+        resp = _make_paginated_response(_default_companies())
+        ctx = _make_ctx(resp)
+        await screen_companies(ctx)
+        kwargs = ctx.request_context.lifespan_context.client.screener.screen.call_args.kwargs
+        assert kwargs.get("in_index") is None
